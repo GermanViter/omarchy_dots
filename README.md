@@ -9,7 +9,6 @@ Personal configuration files and environment settings for Linux.
 - [Dependencies](#dependencies)
 - [Installation](#installation)
 - [Script Options](#script-options)
-- [Theme Switcher](#theme-switcher)
 - [How it Works](#how-it-works)
 - [Troubleshooting](#troubleshooting)
 - [Adding New Configs](#adding-new-configs)
@@ -68,31 +67,6 @@ To apply these configurations to a new system:
 - `--dry-run`: Simulates the process without making any changes.
 - `--unlink`: Removes the symlinks (unstow).
 - `--help`: Displays help information.
-
-## Theme Switcher
-
-The `scripts/switch-theme.sh` script allows you to quickly switch between different color schemes across multiple applications.
-
-### Usage
-```bash
-~/.dotfiles/scripts/switch-theme.sh [main|moon|dawn|catppuccin|black|gruvbox]
-```
-
-### Supported Themes
-- **main**: Rosé Pine (Default)
-- **moon**: Rosé Pine Moon
-- **dawn**: Rosé Pine Dawn
-- **catppuccin**: Catppuccin Mocha
-- **black**: Black Metal Gorgoroth
-- **gruvbox**: Gruvbox Dark
-
-### What it updates:
-- **Kitty**: Reloads all active instances with the new theme color scheme.
-- **Neovim**: Updates the local theme variant configuration file (`theme_variant.lua`).
-- **Starship**: Restores the theme-specific prompt configuration (`starship.toml`).
-- *Note: Other applications (such as Tmux, Yazi, Waybar, Wofi, Ghostty, Alacritty) will also be updated automatically if their configurations are added to this repository.*
-
----
 
 ## How it Works
 
