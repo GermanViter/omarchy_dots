@@ -1,0 +1,6 @@
+[submodule "nvim/.config/init.lua"]
+	path = nvim/.config/init.lua
+	url = https://github.com/GermanViter/init.lua
+[submodule "combined_dots"]
+	path = combined_dots
+	url = https://github.com/GermanViter/combined_dots
