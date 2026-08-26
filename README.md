@@ -55,7 +55,7 @@ To apply these configurations to a new system:
 
 1. **Clone the repository on Omarchy:**
    ```bash
-   git clone https://github.com/your-username/dotfiles.git ~/.dotfiles
+   git clone https://github.com/GermanViter/dotfiles.git ~/.dotfiles
    ```
 
 2. **Run the setup script:**
