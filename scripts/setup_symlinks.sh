@@ -10,7 +10,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-COMBINED_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+DOTFILES_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
 DRY_RUN=false
 UNLINK=false
@@ -63,7 +63,7 @@ if ! command -v omarchy &>/dev/null || [ ! -d "${OMARCHY_PATH:-/usr/share/omarch
 fi
 
 # ── Dependency Check ──────────────────────────────────────────────────────────
-# These are the packages used by the configurations in combined_dots.
+# These are the packages used by the configurations in this repository.
 DEPENDENCIES=(git stow zsh kitty fastfetch starship)
 if omarchy pkg missing "${DEPENDENCIES[@]}"; then
     if [ "$DRY_RUN" = true ]; then
@@ -77,14 +77,14 @@ fi
 
 # ── Stow Packages ─────────────────────────────────────────────────────────────
 # Packages to exclude (not meant for stowing).
-EXCLUDE=("scripts" "assets" "gemini" "combined_dots")
-combined_packages=()
-for dir in "$COMBINED_DIR"/*/; do
+EXCLUDE=("scripts" "assets" "gemini")
+packages=()
+for dir in "$DOTFILES_DIR"/*/; do
     [ -d "$dir" ] || continue
     name=$(basename "$dir")
     [[ " ${EXCLUDE[@]} " =~ " ${name} " ]] && continue
     [[ "$name" == .* ]] && continue
-    combined_packages+=("$name")
+    packages+=("$name")
 done
 
 STOW_FLAGS="-v -t $HOME"
@@ -100,19 +100,19 @@ else
     ACTION_DESC="stow"
 fi
 
-if [ ${#combined_packages[@]} -gt 0 ]; then
-    echo -e "${BLUE}Omarchy packages to ${ACTION_DESC}:${RESET} ${combined_packages[*]}"
+if [ ${#packages[@]} -gt 0 ]; then
+    echo -e "${BLUE}Omarchy packages to ${ACTION_DESC}:${RESET} ${packages[*]}"
 fi
 echo ""
-for pkg in "${combined_packages[@]}"; do
+for pkg in "${packages[@]}"; do
     if [ "$UNLINK" = true ]; then
-        stow -d "$COMBINED_DIR" $STOW_FLAGS "$pkg" || {
-            log_error "Failed to unstow combined_dots/$pkg"
+        stow -d "$DOTFILES_DIR" $STOW_FLAGS "$pkg" || {
+            log_error "Failed to unstow $pkg"
             FAILED=true
         }
     else
-        stow -d "$COMBINED_DIR" $STOW_FLAGS "$pkg" || {
-            log_error "Failed to stow combined_dots/$pkg. Check for existing files."
+        stow -d "$DOTFILES_DIR" $STOW_FLAGS "$pkg" || {
+            log_error "Failed to stow $pkg. Check for existing files."
             FAILED=true
         }
     fi
