@@ -32,7 +32,7 @@ This repository uses a modular structure where each directory represents an appl
 - **Terminal/Shell**: [Zsh](https://www.zsh.org/)
 - **Editors**: [Neovim](https://neovim.io/) (LazyVim)
 - **Prompt**: [Starship](https://starship.rs/)
-- **UI/Window Management**: [Kitty](https://sw.kovidgoyal.net/kitty/)
+- **UI/Window Management**: [Kitty](https://sw.kovidgoyal.net/kitty/), Hyprland keybindings
 - **CLI Tools**: [Fastfetch](https://github.com/fastfetch-cli/fastfetch), [Bat](https://github.com/sharkdp/bat) 
 
 ## Local Overrides
