@@ -43,11 +43,9 @@ To add private configurations (like work-specific paths or API keys) without com
 These files are ignored by Git.
 
 ## Dependencies
-The setup script is intended for Omarchy and automatically installs missing packages through `omarchy pkg add`:
-- **Git** (for cloning the repository)
-- **Zsh** (for shell configurations)
-- **Kitty**, **Fastfetch**, and **Starship** (configured applications)
-- **GNU Stow** (for setting up the symlinks)
+The unified install script is designed specifically for Omarchy and automatically manages dependencies through `omarchy pkg add`:
+- **Core Dependencies**: `stow`, `fzf`, `eza`, `bat`, `zoxide`, `starship`, `fastfetch`
+- **Extended Tools** (with `--all`): `neovim`, `kitty`, `tmux`, `git`, `zsh`
 
 ## Installation
 
@@ -55,28 +53,37 @@ To apply these configurations to a new system:
 
 1. **Clone the repository on Omarchy:**
    ```bash
-   git clone https://github.com/GermanViter/dotfiles.git ~/.dotfiles
+   git clone https://github.com/GermanViter/omarchy_dots.git ~/.dotfiles
+   cd ~/.dotfiles
    ```
 
-2. **Run the setup script:**
-   The script uses [GNU Stow](https://www.gnu.org/software/stow/) to manage symlinks. It will automatically detect packages in the repository and link them to your home directory.
+2. **Run the installer:**
+   The unified `scripts/install.sh` script installs core dependencies via `omarchy pkg add` and creates symlinks using [GNU Stow](https://www.gnu.org/software/stow/):
+   ```bash
+   ./scripts/install.sh
+   ```
 
 ### Script Options
 
-- `(no arguments)`: Creates symlinks using `stow`.
-- `--dry-run`: Simulates the process without making any changes.
-- `--unlink`: Removes the symlinks (unstow).
-- `--help`: Displays help information.
+- `(no arguments)`: Installs core dependencies and creates symlinks.
+- `-n, --dry-run`: Simulates the process without making any changes.
+- `-d, --deps-only`: Installs dependencies only (skips symlinking).
+- `-s, --symlinks-only`: Creates symlinks only (skips dependency installation).
+- `-u, --unlink`: Removes the symlinks (unstow).
+- `-a, --adopt`: Adopts existing target files into the repository during stowing.
+- `--all`: Installs full suite of tools (including Neovim, Kitty, Tmux, Git, Zsh).
+- `-c, --check`: Inspects status of dependencies and available stow packages.
+- `-h, --help`: Displays help information.
 
 ## How it Works
 
-The `scripts/setup_symlinks.sh` script is a wrapper around `stow`:
+The `scripts/install.sh` script is a wrapper around `stow` and `omarchy pkg`:
 
-1. **Modular Packages**: Package directories (e.g., `zsh`, `kitty`, `fastfetch`, and `starship`) are automatically detected and treated as "stow packages".
+1. **Modular Packages**: Package directories (e.g., `zsh`, `kitty`, `fastfetch`, `starship`, and `hypr`) are automatically detected and treated as "stow packages".
 2. **Mirroring**: Stow mirrors the internal structure of these directories into your `$HOME`.
    - `zsh/.zshrc` becomes `~/.zshrc`
-   - `nvim/.config/nvim/` becomes `~/.config/nvim/`
-3. **Safety**: Stow will not overwrite existing real files. It only creates symlinks. If a file already exists, it will report a conflict.
+   - `kitty/.config/kitty/` becomes `~/.config/kitty/`
+3. **Safety**: Stow will not overwrite existing real files by default. It only creates symlinks. If a file already exists, it will report a conflict unless `--adopt` is provided.
 
 ## Updating configurations
 To update your configurations after pulling new changes from the repository:
@@ -84,17 +91,20 @@ To update your configurations after pulling new changes from the repository:
    ```bash
    git pull
    ```
-2. Re-run the setup script to apply any new symlinks:
+2. Re-run the install script to apply any new symlinks:
    ```bash
-   ~/.dotfiles/scripts/setup_symlinks.sh
+   ~/.dotfiles/scripts/install.sh
    ```
 
 ## Troubleshooting
 - If you can't run the script, ensure it has execute permissions:
   ```bash
-  chmod +x ~/.dotfiles/scripts/setup_symlinks.sh
+  chmod +x ~/.dotfiles/scripts/install.sh
   ```
-- If you encounter issues with symlinks, check the backup directory for any files that were moved.
+- If you encounter conflicts with existing configuration files, use `--adopt` to import them into the repository:
+  ```bash
+  ./scripts/install.sh --adopt
+  ```
 - For any application-specific issues, refer to the respective application's documentation or open an issue in this repository.
 
 ## Adding New Configs
@@ -106,7 +116,7 @@ To add a new application to this repo:
 2. **Mirror the destination structure** inside that folder:
    - If the config belongs in `~/.config/app/config`, create `app/.config/app/config`.
    - If the config belongs in `~/.apprc`, create `app/.apprc`.
-3. **Run the setup script** to apply the changes:
+3. **Run the install script** to apply the changes:
    ```bash
-   ./scripts/setup_symlinks.sh
+   ./scripts/install.sh
    ```
