@@ -65,14 +65,15 @@ To apply these configurations to a new system:
 
 ### Script Options
 
-- `(no arguments)`: Installs core dependencies and creates symlinks.
+- `(no arguments)`: Installs core dependencies, creates symlinks, and sets up Zsh with Oh My Zsh.
 - `-n, --dry-run`: Simulates the process without making any changes.
-- `-d, --deps-only`: Installs dependencies only (skips symlinking).
-- `-s, --symlinks-only`: Creates symlinks only (skips dependency installation).
+- `--no-change-shell`: Sets up dotfiles and Oh My Zsh without changing the default login shell.
+- `-d, --deps-only`: Installs dependencies and Zsh setup only (skips symlinking).
+- `-s, --symlinks-only`: Creates symlinks only (skips dependency and Zsh setup).
 - `-u, --unlink`: Removes the symlinks (unstow).
 - `-a, --adopt`: Adopts existing target files into the repository during stowing.
-- `--all`: Installs full suite of tools (including Neovim, Kitty, Tmux, Git, Zsh).
-- `-c, --check`: Inspects status of dependencies and available stow packages.
+- `--all`: Installs full suite of tools (including Neovim, Kitty, Tmux).
+- `-c, --check`: Inspects status of dependencies, default shell, Oh My Zsh, and available stow packages.
 - `-h, --help`: Displays help information.
 
 ## How it Works

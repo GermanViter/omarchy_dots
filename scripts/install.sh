@@ -6,12 +6,13 @@
 #   ./install.sh [options] [package ...]
 #
 # Examples:
-#   ./install.sh                     Install core dependencies and stow all dotfiles
-#   ./install.sh --dry-run           Simulate dependency installs and symlink actions
-#   ./install.sh --deps-only         Only install dependencies (stow, fzf, eza, etc.)
+#   ./install.sh                     Install core dependencies, stow dotfiles, migrate to zsh
+#   ./install.sh --dry-run           Simulate installation and symlink actions
+#   ./install.sh --no-change-shell   Setup dotfiles and zsh without altering default login shell
+#   ./install.sh --deps-only         Only install dependencies and zsh tools (skip symlinks)
 #   ./install.sh --symlinks-only     Only create symlinks using GNU Stow
 #   ./install.sh --all               Install extended packages (includes nvim, kitty, tmux)
-#   ./install.sh --check             Display status of dependencies and packages
+#   ./install.sh --check             Display status of dependencies, shell, and packages
 #   ./install.sh --unlink            Unstow (remove) dotfiles symlinks
 #   ./install.sh --adopt             Adopt existing files into the dotfiles repo
 #   ./install.sh zsh kitty           Install dependencies and stow only zsh and kitty
@@ -56,12 +57,18 @@ DEPS_ONLY=false
 SYMLINKS_ONLY=false
 INSTALL_ALL=false
 CHECK_ONLY=false
+NO_CHANGE_SHELL=false
 FAILED=false
 TARGET_PACKAGES=()
 
-# ── Package Definitions ───────────────────────────────────────────────────────
-CORE_TOOLS=("stow" "fzf" "eza" "bat" "zoxide" "starship" "fastfetch")
-EXTENDED_TOOLS=("tmux" "neovim" "kitty" "git" "zsh")
+# ── Package & Plugin Definitions ──────────────────────────────────────────────
+CORE_TOOLS=("stow" "git" "zsh" "fzf" "eza" "bat" "zoxide" "starship" "fastfetch")
+EXTENDED_TOOLS=("tmux" "neovim" "kitty")
+
+CUSTOM_PLUGINS=(
+    "zsh-autosuggestions:https://github.com/zsh-users/zsh-autosuggestions.git"
+    "zsh-syntax-highlighting:https://github.com/zsh-users/zsh-syntax-highlighting.git"
+)
 
 EXCLUDE=("scripts" "assets" "gemini" "brain" "scratch")
 is_excluded() {
@@ -81,12 +88,13 @@ show_help() {
     echo ""
     echo -e "${BOLD}Options:${RESET}"
     echo "  -n, --dry-run          Simulate installation and symlinks without modifying files"
-    echo "  -d, --deps-only        Only install dependencies (skip symlinks)"
-    echo "  -s, --symlinks-only    Only create symlinks using GNU Stow (skip dependency install)"
+    echo "  -d, --deps-only        Only install dependencies and zsh tools (skip symlinks)"
+    echo "  -s, --symlinks-only    Only create symlinks using GNU Stow (skip dependencies and zsh setup)"
     echo "  -u, --unlink           Remove symlinks (unstow packages)"
     echo "  -a, --adopt            Adopt existing files into the repository during stowing"
-    echo "      --all              Include extended tools (neovim, kitty, tmux, git, zsh)"
-    echo "  -c, --check            Check status of dependencies and packages"
+    echo "      --all              Include extended tools (neovim, kitty, tmux)"
+    echo "      --no-change-shell  Do not change default login shell to zsh"
+    echo "  -c, --check            Check status of dependencies, shell, and packages"
     echo "  -h, --help             Show this help message"
     echo ""
     echo -e "${BOLD}Packages:${RESET}"
@@ -94,12 +102,13 @@ show_help() {
     echo "  If omitted, all detected packages are processed."
     echo ""
     echo -e "${BOLD}Examples:${RESET}"
-    echo "  $0                     Full install (core dependencies + symlinks)"
+    echo "  $0                     Full install (dependencies + symlinks + oh-my-zsh + shell change)"
     echo "  $0 --dry-run           Preview what would happen"
-    echo "  $0 --deps-only         Install stow, fzf, eza, bat, zoxide, starship, fastfetch"
+    echo "  $0 --no-change-shell   Setup dotfiles and oh-my-zsh without altering login shell"
+    echo "  $0 --deps-only         Install dependencies and setup oh-my-zsh without stowing"
     echo "  $0 --symlinks-only     Link dotfiles without installing packages"
-    echo "  $0 --all               Install full suite of CLI tools and GUI terminal apps"
-    echo "  $0 --check             Inspect installed tools and available stow packages"
+    echo "  $0 --all               Install full suite including extended tools (nvim, kitty, tmux)"
+    echo "  $0 --check             Inspect installed tools, shell status, and stow packages"
     echo "  $0 zsh                 Only stow zsh configuration"
     echo "  $0 -u kitty            Unstow kitty configuration"
 }
@@ -133,6 +142,10 @@ while [[ $# -gt 0 ]]; do
         ;;
     -c|--check)
         CHECK_ONLY=true
+        shift
+        ;;
+    --no-change-shell)
+        NO_CHANGE_SHELL=true
         shift
         ;;
     -h|--help)
@@ -192,6 +205,7 @@ get_tool_path() {
     esac
 }
 
+# ── Status Check ──────────────────────────────────────────────────────────────
 run_status_check() {
     log_step "Dependency Status Check (Omarchy)"
     echo -e "${BOLD}Core Dependencies:${RESET}"
@@ -209,6 +223,29 @@ run_status_check() {
             echo -e "  ${GREEN}✓${RESET} $(printf '%-12s' "$tool") [$(get_tool_path "$tool")]"
         else
             echo -e "  ${YELLOW}-${RESET} $(printf '%-12s' "$tool") [not installed]"
+        fi
+    done
+
+    log_step "Shell & Oh My Zsh Status"
+    local user_shell
+    user_shell=$(getent passwd "$USER" 2>/dev/null | cut -d: -f7 || echo "$SHELL")
+    echo -e "  Default Shell: ${BOLD}$user_shell${RESET}"
+
+    local zsh_dir="${ZSH:-$HOME/.oh-my-zsh}"
+    local custom_dir="${ZSH_CUSTOM:-$zsh_dir/custom}"
+    if [ -d "$zsh_dir" ]; then
+        echo -e "  ${GREEN}✓${RESET} $(printf '%-24s' "oh-my-zsh") [$zsh_dir]"
+    else
+        echo -e "  ${RED}✗${RESET} $(printf '%-24s' "oh-my-zsh") [not installed]"
+    fi
+
+    for item in "${CUSTOM_PLUGINS[@]}"; do
+        local name="${item%%:*}"
+        local target_path="$custom_dir/plugins/$name"
+        if [ -d "$target_path" ]; then
+            echo -e "  ${GREEN}✓${RESET} $(printf '%-24s' "$name") [$target_path]"
+        else
+            echo -e "  ${RED}✗${RESET} $(printf '%-24s' "$name") [not installed]"
         fi
     done
 
@@ -230,7 +267,7 @@ if [ "$CHECK_ONLY" = true ]; then
     exit 0
 fi
 
-# ── Dependency Installation ───────────────────────────────────────────────────
+# ── Step 1: Dependency Installation ───────────────────────────────────────────
 install_dependencies() {
     log_step "Step 1: Checking & Installing Dependencies"
 
@@ -267,7 +304,7 @@ install_dependencies() {
     fi
 }
 
-# ── Symlinking with GNU Stow ──────────────────────────────────────────────────
+# ── Step 2: Symlinking with GNU Stow ──────────────────────────────────────────
 setup_symlinks() {
     log_step "Step 2: Symlinking Dotfiles with GNU Stow"
 
@@ -350,6 +387,104 @@ setup_symlinks() {
     fi
 }
 
+# ── Step 3: Migrate to Zsh (Oh My Zsh, Plugins & Default Shell) ────────────────
+migrate_to_zsh() {
+    log_step "Step 3: Migrating to Zsh & Oh My Zsh Setup"
+
+    # 1. Ensure Zsh is installed
+    if ! command -v zsh &>/dev/null; then
+        if [ "$DRY_RUN" = true ]; then
+            log_info "[DRY RUN] Would install zsh package"
+        else
+            log_info "Installing zsh package..."
+            if ! omarchy pkg add zsh; then
+                sudo pacman -S --needed --noconfirm zsh
+            fi
+            log_success "Installed zsh"
+        fi
+    fi
+
+    # 2. Install Oh My Zsh if not already present
+    local zsh_dir="${ZSH:-$HOME/.oh-my-zsh}"
+    local custom_dir="${ZSH_CUSTOM:-$zsh_dir/custom}"
+
+    if [ -d "$zsh_dir" ]; then
+        log_success "Oh My Zsh is already installed ($zsh_dir)"
+    else
+        if [ "$DRY_RUN" = true ]; then
+            log_info "[DRY RUN] Would clone Oh My Zsh to $zsh_dir"
+        else
+            log_info "Installing Oh My Zsh..."
+            if git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$zsh_dir"; then
+                log_success "Oh My Zsh installed successfully!"
+            else
+                log_error "Failed to clone Oh My Zsh from GitHub"
+                FAILED=true
+            fi
+        fi
+    fi
+
+    # 3. Install Oh My Zsh Custom Plugins
+    local plugins_dir="$custom_dir/plugins"
+    for item in "${CUSTOM_PLUGINS[@]}"; do
+        local name="${item%%:*}"
+        local url="${item#*:}"
+        local target_path="$plugins_dir/$name"
+
+        if [ -d "$target_path" ]; then
+            log_success "Plugin $name is already installed ($target_path)"
+        else
+            if [ "$DRY_RUN" = true ]; then
+                log_info "[DRY RUN] Would clone $name from $url to $target_path"
+            else
+                log_info "Installing plugin $name..."
+                mkdir -p "$plugins_dir"
+                if git clone --depth=1 "$url" "$target_path"; then
+                    log_success "Plugin $name installed successfully!"
+                else
+                    log_error "Failed to clone plugin $name from $url"
+                    FAILED=true
+                fi
+            fi
+        fi
+    done
+
+    # 4. Auto Change Default Login Shell
+    if [ "$NO_CHANGE_SHELL" = true ]; then
+        log_info "Skipping shell change (--no-change-shell flag specified)"
+    else
+        local zsh_path
+        zsh_path=$(command -v zsh 2>/dev/null || which zsh 2>/dev/null || echo "/usr/bin/zsh")
+        local current_shell
+        current_shell=$(getent passwd "$USER" 2>/dev/null | cut -d: -f7 || echo "$SHELL")
+
+        if [[ "$current_shell" == "$zsh_path" || "$current_shell" == *"/zsh" ]]; then
+            log_success "Zsh is already the default shell ($current_shell)"
+        else
+            if [ "$DRY_RUN" = true ]; then
+                log_info "[DRY RUN] Would change default shell to $zsh_path"
+            else
+                log_info "Changing default login shell to $zsh_path..."
+                if command -v sudo &>/dev/null && [ "$EUID" -ne 0 ]; then
+                    sudo chsh -s "$zsh_path" "$USER" || chsh -s "$zsh_path" || {
+                        log_warn "Could not change shell automatically. Run: chsh -s $zsh_path"
+                    }
+                else
+                    chsh -s "$zsh_path" || {
+                        log_warn "Could not change shell automatically. Run: chsh -s $zsh_path"
+                    }
+                fi
+
+                local new_shell
+                new_shell=$(getent passwd "$USER" 2>/dev/null | cut -d: -f7 || echo "$SHELL")
+                if [[ "$new_shell" == "$zsh_path" || "$new_shell" == *"/zsh" ]]; then
+                    log_success "Default shell changed to zsh ($zsh_path)"
+                fi
+            fi
+        fi
+    fi
+}
+
 # ── Main Execution ─────────────────────────────────────────────────────────────
 if [ "$SYMLINKS_ONLY" = false ] && [ "$UNLINK" = false ]; then
     install_dependencies
@@ -359,11 +494,20 @@ if [ "$DEPS_ONLY" = false ]; then
     setup_symlinks
 fi
 
+if [ "$SYMLINKS_ONLY" = false ] && [ "$UNLINK" = false ]; then
+    migrate_to_zsh
+fi
+
 echo ""
+if [ "$FAILED" = true ]; then
+    log_error "Setup finished with errors."
+    exit 1
+fi
+
 if [ "$UNLINK" = true ]; then
     log_success "Dotfiles unlinked successfully!"
 elif [ "$DEPS_ONLY" = true ]; then
-    log_success "All dependencies installed successfully!"
+    log_success "Dependencies and Zsh setup completed successfully!"
 else
     log_success "Installation & dotfiles setup completed successfully!"
     if [ "$DRY_RUN" = true ]; then
