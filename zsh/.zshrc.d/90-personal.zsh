@@ -8,7 +8,6 @@ alias gnsw='git update-index --no-skip-worktree'
 alias ll='eza --icons=always -la --group-directories-first'
 alias la='eza --icons=always -a --group-directories-first'
 alias tms='tmux attach-session -t $1'
-alias claude='ollama launch claude --model gemma4:31b-cloud'
 alias claw='ollama launch openclaw --model glm-5:cloud'
 alias gsync='python3 $HOME/.gemini/scripts/obsidian_sync.py'
 
