@@ -9,6 +9,5 @@ fi
 # Keep private overrides out of the dotfiles repository.
 [[ -r "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
 
-
 # Added by Antigravity CLI installer
 export PATH="/home/germanviter/.local/bin:$PATH"
