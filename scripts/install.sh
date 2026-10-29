@@ -496,14 +496,17 @@ install_external_plugins() {
 
     # NOTE: Add the git URLs for these plugins to install them automatically.
     # Example: omarchy plugin add <git-url> --enable
-    omarchy plugin add https://github.com/GermanViter/omarchy-openvpn --enable
-    omarchy plugin add https://github.com/robzolkos/omarchy-github.git --enable
-    omarchy plugin add https://github.com/LukasTrust/betterWorkspaces.git --enable
-    omarchy plugin add https://github.com/tslove923/omarchy-system-monitor.git --enable
+
+    omarchy plugin add https://github.com/GermanViter/omarchy-openvpn --enable --yes || log_warn "Failed to install OpenVPN plugin"
+    omarchy plugin add https://github.com/robzolkos/omarchy-github.git --enable --yes || log_warn "Failed to install GitHub plugin"
+    omarchy plugin add https://github.com/LukasTrust/betterWorkspaces.git --enable --yes || log_warn "Failed to install Better Workspaces plugin"
+    omarchy plugin add https://github.com/tslove923/omarchy-system-monitor.git --enable --yes || log_warn "Failed to install System Monitor plugin"
+
+}
 
 # ── Main Execution ─────────────────────────────────────────────────────────────
 if [ "$SYMLINKS_ONLY" = false ] && [ "$UNLINK" = false ]; then
-    install_dependencies1
+    install_dependencies
 fi
 
 if [ "$DEPS_ONLY" = false ]; then
