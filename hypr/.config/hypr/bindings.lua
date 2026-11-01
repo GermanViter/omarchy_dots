@@ -49,7 +49,7 @@ hl.unbind("SUPER + c")
 hl.unbind("SUPER + v")
 hl.unbind("SUPER + w")
 
-hl.bind("SUPER + c", hl.dsp.window.close())
+o.bind("SUPER + C", "close window", hl.dsp.window.close())
 
 hl.unbind("SUPER + RETURN")
 hl.unbind("SUPER + SHIFT + RETURN")
