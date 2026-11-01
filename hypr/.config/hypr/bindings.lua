@@ -58,3 +58,4 @@ o.bind("SUPER + W", "Browser", "brave --disable-gpu-memory-buffer-video-frames")
 o.bind("SUPER + Q", "Terminal", { launch = "kitty" })
 
 o.bind("SUPER + SHIFT + Q", "Screensaver", "omarchy-launch-screensaver")
+o.bind("SUPER + S", "Minesweeper", "omarchy-shell shell toggle jankeesvw.omasweeper")
