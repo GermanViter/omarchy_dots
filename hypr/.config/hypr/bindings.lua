@@ -34,15 +34,15 @@ hl.unbind("SUPER + j")
 hl.unbind("SUPER + k")
 o.bind("SUPER + ALT + K", "Keybindings", "omarchy-menu-keybindings")
 
-hl.bind("SUPER + h", hl.dsp.focus({ direction = "left" }))
-hl.bind("SUPER + l", hl.dsp.focus({ direction = "right" }))
-hl.bind("SUPER + k", hl.dsp.focus({ direction = "up" }))
-hl.bind("SUPER + j", hl.dsp.focus({ direction = "down" }))
+o.bind("SUPER + H", "Focus on left window", hl.dsp.focus({ direction = "left" }))
+o.bind("SUPER + L", "Focus on right window", hl.dsp.focus({ direction = "right" }))
+o.bind("SUPER + K", "Focus on window above", hl.dsp.focus({ direction = "up" }))
+o.bind("SUPER + J", "Focus on window below", hl.dsp.focus({ direction = "down" }))
 
-hl.bind("SUPER + SHIFT + h", hl.dsp.window.move({ direction = "left" }))
-hl.bind("SUPER + SHIFT + l", hl.dsp.window.move({ direction = "right" }))
-hl.bind("SUPER + SHIFT + k", hl.dsp.window.move({ direction = "up" }))
-hl.bind("SUPER + SHIFT + j", hl.dsp.window.move({ direction = "down" }))
+o.bind("SUPER + SHIFT + H", "Swipe window to the left", hl.dsp.window.move({ direction = "left" }))
+o.bind("SUPER + SHIFT + L", "Swipe window to the right", hl.dsp.window.move({ direction = "right" }))
+o.bind("SUPER + SHIFT + K", "Swipe window up", hl.dsp.window.move({ direction = "up" }))
+o.bind("SUPER + SHIFT + J", "Swipe window down", hl.dsp.window.move({ direction = "down" }))
 
 
 hl.unbind("SUPER + c")
