@@ -46,6 +46,7 @@ hl.bind("SUPER + SHIFT + j", hl.dsp.window.move({ direction = "down" }))
 
 
 hl.unbind("SUPER + c")
+hl.unbind("SUPER + S")
 hl.unbind("SUPER + v")
 hl.unbind("SUPER + w")
 
