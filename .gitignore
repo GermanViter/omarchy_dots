@@ -22,3 +22,13 @@ nvim-pack-lock.json
 .zshrc.local
 .Brewfile.local
 zed/
+
+# Herdr
+gpui-kit.d.ts
+today.json
+jsconfig.json
+store.json
+view.json
+window.json
+update-notes-cache.md
+
