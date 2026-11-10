@@ -1,1 +1,1 @@
-../../../../.local/state/omarchy/current/theme/neovim.lua
+/home/germanviter/.local/state/omarchy/current/theme/neovim.lua
