@@ -33,6 +33,9 @@ hl.unbind("SUPER + L")
 hl.unbind("SUPER + J")
 hl.unbind("SUPER + K")
 hl.unbind("SUPER + Q")
+hl.unbind("SUPER + SPACE")
+hl.unbind("ALT + SPACE")
+
 
 o.bind("SUPER + ALT + K", "Keybindings", "omarchy-menu-keybindings")
 
@@ -62,3 +65,4 @@ o.bind("SUPER + Q", "Terminal", { launch = "kitty" })
 
 o.bind("SUPER + SHIFT + Q", "Screensaver", "omarchy-launch-screensaver")
 o.bind("SUPER + S", "Minesweeper", "omarchy-shell shell toggle jankeesvw.omasweeper")
+
