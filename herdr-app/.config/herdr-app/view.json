@@ -1,0 +1,78 @@
+{
+  "active": "sp6261521bfb567e7bdeba0bab9e681a49",
+  "spaces": {
+    "sp6261521bfb567e7bdeba0bab9e681a49": "tb7ca5274234d7bda794e77520aec8aaea"
+  },
+  "tabs": {
+    "tb10dae078ecef219812bdf94d158d005b": {
+      "focused": "p478c6f0570c3f11e2e2f474c23267bc8",
+      "before": [],
+      "zoomed": null,
+      "settled": null
+    },
+    "tb7ca5274234d7bda794e77520aec8aaea": {
+      "focused": "p53800f1378e97f597f4902426e1b4d90",
+      "before": [],
+      "zoomed": null,
+      "settled": null
+    },
+    "tbbbb5b23ee6111bb1781ba8d39ca7a885": {
+      "focused": "p3b71d923b71ec95ef1f3f55248e80ba8",
+      "before": [],
+      "zoomed": null,
+      "settled": null
+    }
+  },
+  "recent": [
+    {
+      "name": "",
+      "folder": "/home/germanviter"
+    },
+    {
+      "name": "claude",
+      "folder": "/home/germanviter"
+    }
+  ],
+  "attention": {
+    "t1": {
+      "word": "done",
+      "seen": true
+    },
+    "t10": {
+      "word": "working",
+      "seen": true
+    },
+    "t11": {
+      "word": null,
+      "seen": true
+    },
+    "t3": {
+      "word": "done",
+      "seen": true
+    },
+    "t4": {
+      "word": "done",
+      "seen": true
+    },
+    "t5": {
+      "word": "idle",
+      "seen": true
+    },
+    "t6": {
+      "word": null,
+      "seen": true
+    },
+    "t7": {
+      "word": null,
+      "seen": true
+    },
+    "t8": {
+      "word": null,
+      "seen": true
+    },
+    "t9": {
+      "word": null,
+      "seen": true
+    }
+  }
+}
