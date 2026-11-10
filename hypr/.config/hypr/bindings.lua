@@ -29,9 +29,11 @@
 -- o.bind("SUPER + H", nil, "voxtype record toggle")
 -- o.bind("SUPER + PERIOD", nil, "omarchy-shell shell toggle omarchy.emojis")
 
-hl.unbind("SUPER + l")
-hl.unbind("SUPER + j")
-hl.unbind("SUPER + k")
+hl.unbind("SUPER + L")
+hl.unbind("SUPER + J")
+hl.unbind("SUPER + K")
+hl.unbind("SUPER + Q")
+
 o.bind("SUPER + ALT + K", "Keybindings", "omarchy-menu-keybindings")
 
 o.bind("SUPER + H", "Focus on left window", hl.dsp.focus({ direction = "left" }))
