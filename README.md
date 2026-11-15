@@ -10,6 +10,7 @@ Personal configuration files and environment settings for Linux.
 - [Installation](#installation)
 - [Script Options](#script-options)
 - [How it Works](#how-it-works)
+- [Omarchy Plugins](#omarchy-plugins)
 - [Troubleshooting](#troubleshooting)
 - [Adding New Configs](#adding-new-configs)
 
@@ -65,7 +66,7 @@ To apply these configurations to a new system:
 
 ### Script Options
 
-- `(no arguments)`: Installs core dependencies, creates symlinks, and sets up Zsh with Oh My Zsh.
+- `(no arguments)`: Installs core dependencies, creates symlinks, sets up Zsh with Oh My Zsh, and offers the external Omarchy plugins.
 - `-n, --dry-run`: Simulates the process without making any changes.
 - `--no-change-shell`: Sets up dotfiles and Oh My Zsh without changing the default login shell.
 - `-d, --deps-only`: Installs dependencies and Zsh setup only (skips symlinking).
@@ -73,6 +74,8 @@ To apply these configurations to a new system:
 - `-u, --unlink`: Removes the symlinks (unstow).
 - `-a, --adopt`: Adopts existing target files into the repository during stowing.
 - `--all`: Installs full suite of tools (including Neovim, Kitty, Tmux).
+- `-p, --plugins-only`: Only offers the external Omarchy plugins.
+- `--no-plugins`: Skips the Omarchy plugin prompts.
 - `-c, --check`: Inspects status of dependencies, default shell, Oh My Zsh, and available stow packages.
 - `-h, --help`: Displays help information.
 
@@ -85,6 +88,16 @@ The `scripts/install.sh` script is a wrapper around `stow` and `omarchy pkg`:
    - `zsh/.zshrc` becomes `~/.zshrc`
    - `kitty/.config/kitty/` becomes `~/.config/kitty/`
 3. **Safety**: Stow will not overwrite existing real files by default. It only creates symlinks. If a file already exists, it will report a conflict unless `--adopt` is provided.
+
+## Omarchy Plugins
+
+Third-party Omarchy shell plugins are listed in `scripts/omarchy-plugins.txt`, one `<plugin-id> <git-url>` per line. Plugins that ship with Omarchy are not listed.
+
+- **Installing**: `scripts/install.sh` asks about each listed plugin that is not installed yet, then whether to enable it. Answering no skips that plugin and the script carries on. `--plugins-only` runs just this step and `--no-plugins` skips it.
+- **Adding**: run `omarchy plugin add <git-url>` as usual. The wrapper in `zsh/.zshrc.d/96-omarchy-plugins.zsh` then runs `scripts/sync-omarchy-plugins.sh`, which appends the new plugin to the list, commits that one file and pushes it.
+- **Catching up**: run `scripts/sync-omarchy-plugins.sh` by hand to record plugins added another way, such as the Omarchy menu. Use `--no-push` or `--no-commit` to hold back.
+
+The list only grows on its own. To stop offering a plugin, delete its line.
 
 ## Updating configurations
 To update your configurations after pulling new changes from the repository:
