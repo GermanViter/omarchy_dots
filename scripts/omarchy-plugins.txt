@@ -1,0 +1,12 @@
+# Omarchy plugins installed from outside the Omarchy package.
+# Read by scripts/install.sh, maintained by scripts/sync-omarchy-plugins.sh.
+#
+# Format: <plugin-id> <git-url>
+better-workspaces https://github.com/LukasTrust/betterWorkspaces.git
+germanviter.openvpn https://github.com/GermanViter/omarchy-openvpn.git
+io.github.sirjul1337.lock-explorer https://github.com/SirJul1337/omarchy-lock-explorer.git
+jankeesvw.omasweeper https://github.com/jankeesvw/omasweeper.git
+robzolkos.github https://github.com/robzolkos/omarchy-github.git
+rockeyxx.lock-plus https://github.com/Rockeyxx/omarchy-plugin-lock-plus
+trevor.system-monitor https://github.com/tslove923/omarchy-system-monitor
+typecraft.omacast https://github.com/typecraft-dev/oma-cast

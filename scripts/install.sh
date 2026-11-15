@@ -13,6 +13,8 @@
 #   ./install.sh --symlinks-only     Only create symlinks using GNU Stow
 #   ./install.sh --all               Install extended packages (includes nvim, kitty, tmux)
 #   ./install.sh --check             Display status of dependencies, shell, and packages
+#   ./install.sh --plugins-only      Only offer the Omarchy plugins listed in omarchy-plugins.txt
+#   ./install.sh --no-plugins        Skip the Omarchy plugin prompts
 #   ./install.sh --unlink            Unstow (remove) dotfiles symlinks
 #   ./install.sh --adopt             Adopt existing files into the dotfiles repo
 #   ./install.sh zsh kitty           Install dependencies and stow only zsh and kitty
@@ -58,6 +60,8 @@ SYMLINKS_ONLY=false
 INSTALL_ALL=false
 CHECK_ONLY=false
 NO_CHANGE_SHELL=false
+PLUGINS_ONLY=false
+NO_PLUGINS=false
 FAILED=false
 TARGET_PACKAGES=()
 
@@ -69,6 +73,11 @@ CUSTOM_PLUGINS=(
     "zsh-autosuggestions:https://github.com/zsh-users/zsh-autosuggestions.git"
     "zsh-syntax-highlighting:https://github.com/zsh-users/zsh-syntax-highlighting.git"
 )
+
+# External Omarchy plugins, one "<plugin-id> <git-url>" per line.
+# Maintained by scripts/sync-omarchy-plugins.sh, which runs after `omarchy plugin add`.
+OMARCHY_PLUGINS_FILE="$DOTFILES_DIR/scripts/omarchy-plugins.txt"
+OMARCHY_PLUGINS_DIR="$HOME/.config/omarchy/plugins"
 
 EXCLUDE=("scripts" "assets" "gemini" "brain" "scratch")
 is_excluded() {
@@ -94,6 +103,8 @@ show_help() {
     echo "  -a, --adopt            Adopt existing files into the repository during stowing"
     echo "      --all              Include extended tools (neovim, kitty, tmux)"
     echo "      --no-change-shell  Do not change default login shell to zsh"
+    echo "  -p, --plugins-only     Only offer the Omarchy plugins listed in scripts/omarchy-plugins.txt"
+    echo "      --no-plugins       Skip the Omarchy plugin prompts"
     echo "  -c, --check            Check status of dependencies, shell, and packages"
     echo "  -h, --help             Show this help message"
     echo ""
@@ -109,6 +120,7 @@ show_help() {
     echo "  $0 --symlinks-only     Link dotfiles without installing packages"
     echo "  $0 --all               Install full suite including extended tools (nvim, kitty, tmux)"
     echo "  $0 --check             Inspect installed tools, shell status, and stow packages"
+    echo "  $0 --plugins-only      Choose which external Omarchy plugins to install"
     echo "  $0 zsh                 Only stow zsh configuration"
     echo "  $0 -u kitty            Unstow kitty configuration"
 }
@@ -146,6 +158,14 @@ while [[ $# -gt 0 ]]; do
         ;;
     --no-change-shell)
         NO_CHANGE_SHELL=true
+        shift
+        ;;
+    -p|--plugins-only)
+        PLUGINS_ONLY=true
+        shift
+        ;;
+    --no-plugins)
+        NO_PLUGINS=true
         shift
         ;;
     -h|--help)
@@ -205,6 +225,33 @@ get_tool_path() {
     esac
 }
 
+# Prints "<plugin-id> <git-url>" for every entry in the plugin list.
+read_omarchy_plugins() {
+    [ -f "$OMARCHY_PLUGINS_FILE" ] || return 0
+    local id url _rest
+    while read -r id url _rest || [ -n "$id" ]; do
+        [[ -z "$id" || "$id" == \#* ]] && continue
+        if [ -z "$url" ]; then
+            log_warn "Ignoring plugin '$id' in $OMARCHY_PLUGINS_FILE: no git URL"
+            continue
+        fi
+        echo "$id $url"
+    done <"$OMARCHY_PLUGINS_FILE"
+}
+
+# Asks a yes/no question that defaults to no. Returns 0 only on an explicit yes.
+ask_yes_no() {
+    local prompt="$1" reply rc=0
+    if command -v gum &>/dev/null; then
+        gum confirm --default=false "$prompt" || rc=$?
+        # 130 is Ctrl-C: stop the whole script instead of treating it as "no".
+        [ "$rc" -eq 130 ] && exit 130
+        return "$rc"
+    fi
+    read -r -p "$prompt [y/N] " reply
+    [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
 # ── Status Check ──────────────────────────────────────────────────────────────
 run_status_check() {
     log_step "Dependency Status Check (Omarchy)"
@@ -248,6 +295,20 @@ run_status_check() {
             echo -e "  ${RED}✗${RESET} $(printf '%-24s' "$name") [not installed]"
         fi
     done
+
+    log_step "External Omarchy Plugins"
+    local plugin_id plugin_url plugin_count=0
+    while read -r plugin_id plugin_url; do
+        plugin_count=$((plugin_count + 1))
+        if [ -e "$OMARCHY_PLUGINS_DIR/$plugin_id" ]; then
+            echo -e "  ${GREEN}✓${RESET} $(printf '%-36s' "$plugin_id") [$plugin_url]"
+        else
+            echo -e "  ${YELLOW}-${RESET} $(printf '%-36s' "$plugin_id") [not installed]"
+        fi
+    done < <(read_omarchy_plugins)
+    if [ "$plugin_count" -eq 0 ]; then
+        echo -e "  ${YELLOW}-${RESET} no plugins listed in $OMARCHY_PLUGINS_FILE"
+    fi
 
     log_step "Dotfiles Stow Packages"
     echo -e "${BOLD}Omarchy Packages ($DOTFILES_DIR):${RESET}"
@@ -485,7 +546,90 @@ migrate_to_zsh() {
     fi
 }
 
+# ── Step 4: External Omarchy Plugins ──────────────────────────────────────────
+# Offers each plugin from scripts/omarchy-plugins.txt in turn. Declining one, or
+# one failing to install, never stops the rest of the script.
+install_omarchy_plugins() {
+    log_step "Step 4: External Omarchy Plugins"
+
+    local plugins=()
+    mapfile -t plugins < <(read_omarchy_plugins)
+
+    if [ ${#plugins[@]} -eq 0 ]; then
+        log_info "No plugins listed in $OMARCHY_PLUGINS_FILE"
+        return 0
+    fi
+
+    local entry id url installed=0 skipped=0
+    for entry in "${plugins[@]}"; do
+        id="${entry%% *}"
+        url="${entry#* }"
+
+        if [ -e "$OMARCHY_PLUGINS_DIR/$id" ]; then
+            log_success "Plugin $id is already installed"
+            continue
+        fi
+
+        if [ "$DRY_RUN" = true ]; then
+            log_info "[DRY RUN] Would ask to install plugin $id from $url"
+            continue
+        fi
+
+        # Without a terminal there is nobody to ask, so nothing is installed.
+        if [ ! -t 0 ] || [ ! -t 1 ]; then
+            log_warn "Skipping plugin $id (no terminal to ask on). Install with: omarchy plugin add $url"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        echo -e "\n  ${BOLD}$id${RESET}\n  $url"
+        if ! ask_yes_no "Install Omarchy plugin $id?"; then
+            log_info "Skipped $id"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        # The question above is the consent, so --yes skips omarchy's own prompts.
+        if ! omarchy plugin add "$url" --yes; then
+            if [ -f "$OMARCHY_PLUGINS_DIR/$id/manifest.json" ]; then
+                log_warn "Plugin $id was downloaded but the Omarchy shell did not pick it up. Run: omarchy restart shell"
+            else
+                log_error "Failed to install plugin $id from $url"
+                FAILED=true
+            fi
+            continue
+        fi
+        installed=$((installed + 1))
+        log_success "Installed plugin $id"
+
+        if ask_yes_no "Enable $id now?"; then
+            if omarchy plugin enable "$id"; then
+                log_success "Enabled plugin $id"
+            else
+                log_warn "Could not enable $id. Enable it later with: omarchy plugin enable $id"
+            fi
+        else
+            log_info "Left $id disabled. Enable it later with: omarchy plugin enable $id"
+        fi
+    done
+
+    if [ "$DRY_RUN" = false ]; then
+        log_info "Plugins installed: $installed, skipped: $skipped"
+    fi
+}
+
 # ── Main Execution ─────────────────────────────────────────────────────────────
+if [ "$PLUGINS_ONLY" = true ]; then
+    install_omarchy_plugins
+    echo ""
+    if [ "$FAILED" = true ]; then
+        log_error "Plugin setup finished with errors."
+        exit 1
+    fi
+    log_success "Omarchy plugin setup completed!"
+    exit 0
+fi
+
 if [ "$SYMLINKS_ONLY" = false ] && [ "$UNLINK" = false ]; then
     install_dependencies
 fi
@@ -496,6 +640,10 @@ fi
 
 if [ "$SYMLINKS_ONLY" = false ] && [ "$UNLINK" = false ]; then
     migrate_to_zsh
+fi
+
+if [ "$SYMLINKS_ONLY" = false ] && [ "$UNLINK" = false ] && [ "$NO_PLUGINS" = false ]; then
+    install_omarchy_plugins
 fi
 
 echo ""
