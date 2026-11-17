@@ -618,6 +618,34 @@ install_omarchy_plugins() {
     fi
 }
 
+# ── Step 5: Reload Hyprland ───────────────────────────────────────────────────
+# Applies the freshly linked configs to the running session. A failed reload
+# only warns, since the configs are still applied on the next login.
+reload_hyprland() {
+    log_step "Step 5: Reloading Hyprland"
+
+    if ! command -v hyprctl &>/dev/null; then
+        log_warn "hyprctl not found, skipping Hyprland reload"
+        return 0
+    fi
+
+    if [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        log_warn "Hyprland is not running in this session, skipping reload"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY RUN] Would run: hyprctl reload"
+        return 0
+    fi
+
+    if hyprctl reload >/dev/null; then
+        log_success "Hyprland reloaded"
+    else
+        log_warn "hyprctl reload failed. Run it manually: hyprctl reload"
+    fi
+}
+
 # ── Main Execution ─────────────────────────────────────────────────────────────
 if [ "$PLUGINS_ONLY" = true ]; then
     install_omarchy_plugins
@@ -644,6 +672,10 @@ fi
 
 if [ "$SYMLINKS_ONLY" = false ] && [ "$UNLINK" = false ] && [ "$NO_PLUGINS" = false ]; then
     install_omarchy_plugins
+fi
+
+if [ "$DEPS_ONLY" = false ]; then
+    reload_hyprland
 fi
 
 echo ""
