@@ -101,6 +101,7 @@ show_help() {
     echo "  -s, --symlinks-only    Only create symlinks using GNU Stow (skip dependencies and zsh setup)"
     echo "  -u, --unlink           Remove symlinks (unstow packages)"
     echo "  -a, --adopt            Adopt existing files into the repository during stowing"
+    echo "                         (without it, conflicting files move to ~/.dotfiles-backup/<timestamp>/)"
     echo "      --all              Include extended tools (neovim, kitty, tmux)"
     echo "      --no-change-shell  Do not change default login shell to zsh"
     echo "  -p, --plugins-only     Only offer the Omarchy plugins listed in scripts/omarchy-plugins.txt"
@@ -366,6 +367,67 @@ install_dependencies() {
 }
 
 # ── Step 2: Symlinking with GNU Stow ──────────────────────────────────────────
+# Existing files that would block stow are moved here rather than deleted.
+BACKUP_DIR="$HOME/.dotfiles-backup/$(date +%Y%m%d-%H%M%S)"
+BACKED_UP=0
+CONFLICTS=0
+
+# Moves one conflicting path from $HOME into $BACKUP_DIR, keeping its layout.
+backup_conflict() {
+    local rel="$1"
+    local target="$HOME/$rel"
+    local dest="$BACKUP_DIR/$rel"
+    CONFLICTS=$((CONFLICTS + 1))
+
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY RUN] Would move ~/$rel to $dest"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$dest")"
+    if mv "$target" "$dest"; then
+        log_warn "Moved existing ~/$rel to $dest"
+        BACKED_UP=$((BACKED_UP + 1))
+    else
+        log_error "Could not move ~/$rel out of the way"
+        FAILED=true
+    fi
+}
+
+# Walks a stow package and clears every path in $HOME that stow would refuse
+# to replace. Real directories present on both sides are walked into rather
+# than moved, so files the repo does not track (e.g. Omarchy's own
+# ~/.config/hypr/hyprland.lua) stay where they are.
+clear_conflicts() {
+    local src_dir="$1" rel_dir="$2"
+    local src name rel target resolved
+
+    while IFS= read -r -d '' src; do
+        name="$(basename "$src")"
+        # Names stow ignores by default; they are never linked, so never conflict.
+        case "$name" in
+        .git | .gitignore | .gitmodules | *~) continue ;;
+        esac
+
+        rel="${rel_dir:+$rel_dir/}$name"
+        target="$HOME/$rel"
+
+        # Nothing there: stow can link it.
+        [ -e "$target" ] || [ -L "$target" ] || continue
+
+        if [ -L "$target" ]; then
+            # Already points into this repo (stowed earlier): leave it.
+            resolved="$(readlink -f "$target" || true)"
+            [[ "$resolved" == "$DOTFILES_DIR" || "$resolved" == "$DOTFILES_DIR"/* ]] && continue
+            backup_conflict "$rel"
+        elif [ -d "$src" ] && [ ! -L "$src" ] && [ -d "$target" ]; then
+            clear_conflicts "$src" "$rel"
+        else
+            backup_conflict "$rel"
+        fi
+    done < <(find "$src_dir" -mindepth 1 -maxdepth 1 -print0)
+}
+
 setup_symlinks() {
     log_step "Step 2: Symlinking Dotfiles with GNU Stow"
 
@@ -433,14 +495,26 @@ setup_symlinks() {
                 FAILED=true
             fi
         else
+            # --adopt pulls existing files into the repo instead, so keep them.
+            CONFLICTS=0
+            if [ "$ADOPT" = false ]; then
+                clear_conflicts "$DOTFILES_DIR/$pkg" ""
+            fi
             if stow -d "$DOTFILES_DIR" "${stow_flags[@]}" "$pkg"; then
                 log_success "Stowed $pkg"
+            elif [ "$DRY_RUN" = true ] && [ "$CONFLICTS" -gt 0 ]; then
+                # The simulated stow still sees the files a real run would move first.
+                log_info "[DRY RUN] $pkg would stow once the $CONFLICTS path(s) above are moved"
             else
                 log_error "Failed to stow $pkg. Check for existing conflicting files (use --adopt to adopt existing files)."
                 FAILED=true
             fi
         fi
     done
+
+    if [ "$BACKED_UP" -gt 0 ]; then
+        log_info "Backed up $BACKED_UP existing path(s) to $BACKUP_DIR"
+    fi
 
     if [ "$FAILED" = true ]; then
         log_error "Symlink setup finished with errors."
