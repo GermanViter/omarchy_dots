@@ -428,6 +428,36 @@ clear_conflicts() {
     done < <(find "$src_dir" -mindepth 1 -maxdepth 1 -print0)
 }
 
+# Omarchy owns ~/.config/nvim/lua/plugins/theme.lua: a symlink to the current
+# theme's neovim.lua that theme switches and migrations keep pointing at the
+# right place. The repo cannot track it (stow refuses absolute symlinks), so
+# recreate it here if the backup step or a fresh checkout left it missing.
+ensure_nvim_theme_link() {
+    local plugins_dir="$HOME/.config/nvim/lua/plugins"
+    local link="$plugins_dir/theme.lua"
+    local target="../../../../.local/state/omarchy/current/theme/neovim.lua"
+
+    [ -d "$plugins_dir" ] || return 0
+    [ -e "$link" ] || [ -L "$link" ] && return 0
+
+    # A relative link resolves from the physical directory, so if stow folded
+    # plugins/ into a link to the repo, point at the state dir absolutely.
+    if [ "$(cd -P "$plugins_dir" && pwd)" != "$plugins_dir" ]; then
+        target="$HOME/.local/state/omarchy/current/theme/neovim.lua"
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY RUN] Would link ~/.config/nvim/lua/plugins/theme.lua to the Omarchy theme"
+        return 0
+    fi
+
+    if ln -s "$target" "$link"; then
+        log_success "Linked Neovim to the current Omarchy theme"
+    else
+        log_warn "Could not create $link. Run: omarchy theme set \"\$(omarchy theme current)\""
+    fi
+}
+
 setup_symlinks() {
     log_step "Step 2: Symlinking Dotfiles with GNU Stow"
 
@@ -502,6 +532,7 @@ setup_symlinks() {
             fi
             if stow -d "$DOTFILES_DIR" "${stow_flags[@]}" "$pkg"; then
                 log_success "Stowed $pkg"
+                [ "$pkg" = "nvim" ] && ensure_nvim_theme_link
             elif [ "$DRY_RUN" = true ] && [ "$CONFLICTS" -gt 0 ]; then
                 # The simulated stow still sees the files a real run would move first.
                 log_info "[DRY RUN] $pkg would stow once the $CONFLICTS path(s) above are moved"
