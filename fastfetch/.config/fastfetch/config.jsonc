@@ -5,7 +5,7 @@
     //"source": "~/.dotfiles/fastfetch/.config/fastfetch/images/LLawliet.png",
     "source": "~/.config/omarchy/branding/about.txt",
     //"width": 30,
-    "color": { "1": "green" },
+    "color": { "1": "#d9a7ad" },
     "padding": {
       "top": 2,
       "right": 6,
