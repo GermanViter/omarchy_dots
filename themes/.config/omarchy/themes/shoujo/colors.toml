@@ -1,0 +1,33 @@
+# Shoujo — dusk-navy ink with blush-pink linework,
+# drawn from japanese_inverted.png (少女装甲战士)
+mode = "dark"
+
+accent = "#d9a7ad"
+selection = "#4c4957"
+muted = "#68626e"
+
+background = "#272837"
+dark_background = "#1f2030"
+darker_background = "#1a1b28"
+lighter_background = "#363746"
+
+foreground = "#e3cdcd"
+dark_foreground = "#847b85"
+light_foreground = "#cab9bc"
+bright_foreground = "#f2e4e4"
+
+red = "#d98a92"
+yellow = "#e6c9a0"
+orange = "#e3a98f"
+green = "#a9c2a6"
+cyan = "#9cc3c9"
+blue = "#9fb2d4"
+magenta = "#c9a3c4"
+brown = "#7a6266"
+
+bright_red = "#eaa3aa"
+bright_yellow = "#f0dab8"
+bright_green = "#bfd4bc"
+bright_cyan = "#b4d6db"
+bright_blue = "#b8c7e3"
+bright_magenta = "#dcbcd7"
