@@ -1,0 +1,59 @@
+#!/bin/bash
+# Renders a themed copy of ~/.config/starship.toml whose [palettes.omarchy]
+# section takes its colors from the active Omarchy theme.
+#
+# Called by omarchy-theme-set with the theme slug as $1, and by
+# ~/.zshrc.d/10-prompt.zsh whenever starship.toml is newer than the copy.
+# The tracked starship.toml is only read, never written, so a theme switch
+# leaves the dotfiles repo clean and the stow symlink in place.
+
+set -euo pipefail
+
+COLORS="$HOME/.local/state/omarchy/current/theme/colors.toml"
+SOURCE="$HOME/.config/starship.toml"
+OUTPUT="${XDG_STATE_HOME:-$HOME/.local/state}/starship/omarchy.toml"
+
+[[ -f $COLORS && -f $SOURCE ]] || exit 0
+
+mkdir -p "${OUTPUT%/*}"
+TEMP_OUTPUT=$(mktemp "${OUTPUT}.XXXXXX")
+trap 'rm -f "$TEMP_OUTPUT"' EXIT
+
+# Starship palette key -> Omarchy colors.toml key(s), first one present wins.
+# A key the theme lacks keeps the value starship.toml ships as its fallback.
+awk -F '=' '
+  NR == FNR {
+    key = $1; value = $2
+    gsub(/[[:space:]]/, "", key)
+    gsub(/[[:space:]"]/, "", value)
+    if (value ~ /^#[[:xdigit:]]{6}$/) theme[key] = value
+    next
+  }
+
+  FNR == 1 {
+    split("base=background mantle=dark_background crust=darker_background " \
+          "surface0=lighter_background surface1=selection surface2=muted " \
+          "text=foreground subtext1=light_foreground subtext0=dark_foreground " \
+          "red=red yellow=yellow green=green teal=cyan blue=blue " \
+          "purple=magenta peach=orange,yellow lavender=accent", pairs, " ")
+    for (i in pairs) {
+      split(pairs[i], kv, "=")
+      n = split(kv[2], candidates, ",")
+      for (j = 1; j <= n; j++) {
+        if (candidates[j] in theme) { color[kv[1]] = theme[candidates[j]]; break }
+      }
+    }
+  }
+
+  /^\[palettes\.omarchy\][[:space:]]*$/ { in_palette = 1; print; next }
+  in_palette && /^[[:space:]]*\[/ { in_palette = 0 }
+  in_palette {
+    key = $1
+    gsub(/[[:space:]]/, "", key)
+    if (key in color) { print key " = \"" color[key] "\""; next }
+  }
+  { print }
+' "$COLORS" "$SOURCE" >"$TEMP_OUTPUT"
+
+mv "$TEMP_OUTPUT" "$OUTPUT"
+trap - EXIT
