@@ -33,8 +33,6 @@ hl.unbind("SUPER + L")
 hl.unbind("SUPER + J")
 hl.unbind("SUPER + K")
 hl.unbind("SUPER + Q")
-hl.unbind("SUPER + SPACE")
-hl.unbind("ALT + SPACE")
 
 
 o.bind("SUPER + ALT + K", "Keybindings", "omarchy-menu-keybindings")
@@ -66,4 +64,14 @@ o.bind("SUPER + Q", "Terminal", { launch = "kitty" })
 o.bind("SUPER + SHIFT + Q", "Screensaver", "omarchy-launch-screensaver")
 o.bind("SUPER + S", "Minesweeper", "omarchy-shell shell toggle jankeesvw.omasweeper")
 
-o.bind("SUPER + SPACE", "omacast launcher", hl.dsp.global("omacast:toggle"))
+-- If omacast is installed, replace Omarchy's SUPER+SPACE launcher with it and
+-- leave ALT+SPACE unbound. Without omacast, Omarchy's defaults stay untouched.
+local f = io.open((os.getenv("HOME") or "") .. "/.config/omarchy/plugins/typecraft.omacast/manifest.json", "r")
+if f then
+  f:close()
+  hl.unbind("SUPER + SPACE")
+  hl.unbind("ALT + SPACE")
+  o.bind("SUPER + SPACE", "omacast launcher", hl.dsp.global("omacast:toggle"))
+  -- hyprland.lua requires hypr.omacast (binds ALT+SPACE) after this file; stub it.
+  package.loaded["hypr.omacast"] = true
+end
