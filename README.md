@@ -4,7 +4,8 @@ Personal configuration files and environment settings for Linux.
 
 ## Contents
 - [Overview](#overview)
-- [Screenshots](#screenshots)
+- [Themes](#themes)
+- [Plugins](#plugins)
 - [Managed Applications](#managed-applications)
 - [Dependencies](#dependencies)
 - [Installation](#installation)
@@ -18,15 +19,43 @@ Personal configuration files and environment settings for Linux.
 
 This repository uses a modular structure where each directory represents an application or tool. A central setup script manages the creation of symbolic links from the repository to your home directory and `~/.config` folder on [Omarchy](https://omarchy.org/).
 
-## Screenshots
+## Themes
 
-<ul align="center">
-  <li><h3>Fastfetch</h3><img src="assets/pictures/fastfetch.png" width="400" /></li>
-  <li><h3>NeoVim</h3><img src="assets/pictures/nvim.png" width="400" /></li>
-</ul>
+| shoujo-dark | shoujo-light |
+| :---: | :---: |
+| <img src="themes/.config/omarchy/themes/shoujo-dark/preview.png" width="400" /> | <img src="themes/.config/omarchy/themes/shoujo-light/preview.png" width="400" /> |
 
 > [!TIP]
 > Checkout my wallpapers on [GermanViter/wallpapers](https://github.com/GermanViter/wallpapers).
+
+## Plugins
+
+The Omarchy plugins I use. See [Omarchy Plugins](#omarchy-plugins) for how they get installed.
+
+<table>
+  <tr>
+    <th><a href="https://github.com/typecraft-dev/oma-cast">Omacast</a></th>
+    <th><a href="https://github.com/jankeesvw/omasweeper">Omasweeper</a></th>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/pictures/plugins/omacast.png" width="400" /></td>
+    <td align="center"><img src="assets/pictures/plugins/omasweeper.png" width="400" /></td>
+  </tr>
+  <tr>
+    <th><a href="https://github.com/robzolkos/omarchy-github">GitHub</a></th>
+    <th><a href="https://github.com/tslove923/omarchy-system-monitor">System Monitor</a></th>
+  </tr>
+  <tr>
+    <td align="center" rowspan="3"><img src="assets/pictures/plugins/github.png" width="260" /></td>
+    <td align="center"><img src="assets/pictures/plugins/system_monitor.png" width="400" /></td>
+  </tr>
+  <tr>
+    <th>Tailscale</th>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/pictures/plugins/tailscale.png" width="300" /></td>
+  </tr>
+</table>
 
 ## Managed Applications
 
