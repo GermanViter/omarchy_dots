@@ -1,0 +1,939 @@
+#!/usr/bin/env python3
+"""Build the Shoujo theme plugin for IntelliJ IDEA from the Omarchy themes.
+
+Reads ~/.config/omarchy/themes/shoujo-{dark,light}/colors.toml and the Islands
+themes of the installed IDE, and writes a small theme plugin holding
+"Shoujo Dark" and "Shoujo Light": each one is Islands with its palette, layer
+colors and editor scheme redrawn in the Shoujo colors.
+
+The plugin lands in every JetBrains product data dir that has a config dir,
+~/.local/share/JetBrains/<Product><Version>/shoujo-theme/lib/shoujo-theme.jar,
+and is only rewritten when its content changes. IntelliJ loads a new or
+changed copy on its next start.
+
+  intellij-shoujo-theme              build and install the plugin
+  intellij-shoujo-theme --configure  also turn on "Sync with OS" with
+                                     Shoujo Light/Dark as its two themes
+                                     (only while the IDE is closed)
+
+The Omarchy theme-set hook runs it without flags, so edits to either
+colors.toml, a new IDE version, or a fresh machine pick it up on the next
+theme switch. Omarchy flips the desktop color-scheme between light and dark,
+and IntelliJ follows that through "Sync with OS".
+"""
+
+import argparse
+import copy
+import hashlib
+import io
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tomllib
+import zipfile
+from datetime import datetime
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+HOME = Path.home()
+THEMES_DIR = HOME / ".config/omarchy/themes"
+CONFIG_ROOT = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "JetBrains"
+DATA_ROOT = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share")) / "JetBrains"
+CURRENT_THEME_NAME = HOME / ".local/state/omarchy/current/theme.name"
+
+PLUGIN_ID = "omarchy.shoujo-theme"
+PLUGIN_DIR = "shoujo-theme"
+PLATFORM_JAR = "lib/intellij.platform.ide.impl.jar"
+
+VARIANTS = {
+    "dark": {
+        "slug": "shoujo-dark",
+        "name": "Shoujo Dark",
+        "parent_theme": "Islands Dark",
+        "parent_scheme": "Darcula",
+        "islands_json": "themes/islands/ManyIslandsDark.theme.json",
+        "source_scheme": "themes/islands/IslandSchemeDark.xml",
+    },
+    "light": {
+        "slug": "shoujo-light",
+        "name": "Shoujo Light",
+        "parent_theme": "Islands Light",
+        "parent_scheme": "Default",
+        "islands_json": "themes/islands/ManyIslandsLight.theme.json",
+        "source_scheme": "themes/Light.xml",
+    },
+}
+
+# Islands ramp -> Omarchy key for its base color and the bright one above it.
+HUE_RAMPS = {
+    "red": ("red", "bright_red"),
+    "orange": ("orange", None),
+    "yellow": ("yellow", "bright_yellow"),
+    "green": ("green", "bright_green"),
+    "teal": ("cyan", "bright_cyan"),
+    "blue": ("blue", "bright_blue"),
+    "purple": ("magenta", "bright_magenta"),
+}
+SYNTAX_HUES = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta"]
+STEPS = range(10, 170, 10)
+
+
+# --- color math (OKLab) ------------------------------------------------------
+
+def _to_linear(c):
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _to_srgb(c):
+    return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+
+
+def parse_hex(value):
+    value = value.strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    rgb = tuple(int(value[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    alpha = value[6:8] if len(value) == 8 else ""
+    return rgb, alpha
+
+
+def lab(value):
+    (r, g, b), _ = parse_hex(value) if isinstance(value, str) else (value, "")
+    r, g, b = _to_linear(r), _to_linear(g), _to_linear(b)
+    l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+    m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+    s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+    l, m, s = (math.copysign(abs(x) ** (1 / 3), x) for x in (l, m, s))
+    return (
+        0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+        1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+    )
+
+
+def _lab_to_linear(L, a, b):
+    l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3
+    m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3
+    s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3
+    return (
+        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+    )
+
+
+def from_lab(L, a, b):
+    """OKLab -> #rrggbb, pulling chroma in until the color fits in sRGB."""
+    L = min(max(L, 0.0), 1.0)
+    eps = 1e-6
+
+    def fits(k):
+        return all(-eps <= c <= 1 + eps for c in _lab_to_linear(L, a * k, b * k))
+
+    k = 1.0
+    if not fits(1.0):
+        lo, hi = 0.0, 1.0
+        for _ in range(24):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if fits(mid) else (lo, mid)
+        k = lo
+    rgb = (_to_srgb(min(max(c, 0.0), 1.0)) for c in _lab_to_linear(L, a * k, b * k))
+    return "#" + "".join(f"{round(c * 255):02x}" for c in rgb)
+
+
+def mix(c1, c2, t):
+    """Blend t of the way from c1 to c2, in OKLab."""
+    p, q = lab(c1), lab(c2)
+    return from_lab(*(x + (y - x) * t for x, y in zip(p, q)))
+
+
+def chroma(value):
+    _, a, b = lab(value)
+    return math.hypot(a, b)
+
+
+def hue(value):
+    _, a, b = lab(value)
+    return math.atan2(b, a)
+
+
+def lightness(value):
+    return lab(value)[0]
+
+
+def luminance(value):
+    (r, g, b), _ = parse_hex(value)
+    return 0.2126 * _to_linear(r) + 0.7152 * _to_linear(g) + 0.0722 * _to_linear(b)
+
+
+def contrast(c1, c2):
+    y1, y2 = sorted((luminance(c1), luminance(c2)), reverse=True)
+    return (y1 + 0.05) / (y2 + 0.05)
+
+
+def hue_distance(h1, h2):
+    d = abs(h1 - h2) % (2 * math.pi)
+    return min(d, 2 * math.pi - d)
+
+
+class Curve:
+    """Piecewise-linear map through (x, y) points, extended past both ends."""
+
+    def __init__(self, points):
+        self.points = sorted(points)
+
+    def __call__(self, x):
+        pts = self.points
+        if x <= pts[0][0]:
+            (x0, y0), (x1, y1) = pts[0], pts[1]
+        elif x >= pts[-1][0]:
+            (x0, y0), (x1, y1) = pts[-2], pts[-1]
+        else:
+            i = next(i for i in range(1, len(pts)) if x <= pts[i][0])
+            (x0, y0), (x1, y1) = pts[i - 1], pts[i]
+        if x1 == x0:
+            return y0
+        return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+
+# --- palette -----------------------------------------------------------------
+
+def load_palette(slug):
+    path = THEMES_DIR / slug / "colors.toml"
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    palette = {k: v.lower() for k, v in data.items() if isinstance(v, str) and v.startswith("#")}
+    missing = {"background", "foreground", "accent"} - palette.keys()
+    if missing:
+        sys.exit(f"{path}: missing {', '.join(sorted(missing))}")
+    bg, fg = palette["background"], palette["foreground"]
+    defaults = {
+        "dark_background": mix(bg, "#000000", 0.15),
+        "darker_background": mix(bg, "#000000", 0.3),
+        "lighter_background": mix(bg, fg, 0.08),
+        "selection": mix(bg, fg, 0.2),
+        "muted": mix(bg, fg, 0.4),
+        "dark_foreground": mix(bg, fg, 0.55),
+        "light_foreground": mix(bg, fg, 0.85),
+        "bright_foreground": mix(fg, "#ffffff" if lightness(fg) > lightness(bg) else "#000000", 0.4),
+    }
+    for key, value in defaults.items():
+        palette.setdefault(key, value)
+    for hue_key in SYNTAX_HUES:
+        palette.setdefault(hue_key, palette["accent"])
+        palette.setdefault(f"bright_{hue_key}", palette[hue_key])
+    palette["mode"] = data.get("mode", "dark" if lightness(bg) < 0.5 else "light")
+    return palette
+
+
+def gray_anchors(mode, p):
+    """Islands gray step -> the Shoujo neutral that plays the same part."""
+    if mode == "dark":
+        return {
+            10: p["background"],
+            20: mix(p["background"], p["lighter_background"], 0.5),
+            30: p["lighter_background"],
+            50: p["selection"],
+            60: p["muted"],
+            80: p["dark_foreground"],
+            120: p["light_foreground"],
+            130: p["foreground"],
+            150: p["bright_foreground"],
+            160: mix(p["bright_foreground"], "#ffffff", 0.5),
+        }
+    return {
+        10: mix(p["bright_foreground"], "#000000", 0.3),
+        20: p["bright_foreground"],
+        30: p["foreground"],
+        50: p["light_foreground"],
+        80: p["dark_foreground"],
+        100: p["muted"],
+        # Control and panel borders sit a little darker than the selection, so
+        # text fields still show against the tinted panels.
+        130: mix(p["selection"], p["muted"], 0.35),
+        140: p["darker_background"],
+        150: p["background"],
+        160: p["lighter_background"],
+    }
+
+
+def resolve(colors, value, depth=0):
+    while isinstance(value, str) and not value.startswith("#") and value in colors and depth < 20:
+        value, depth = colors[value], depth + 1
+    return value if isinstance(value, str) and value.startswith("#") else None
+
+
+def build_ramps(mode, p, islands_colors):
+    """Recolor the Islands gray and hue ramps in the Shoujo colors.
+
+    Each Islands step keeps its place in the light-to-dark order, moved by a
+    lightness curve that takes the Islands grays onto the Shoujo neutrals, and
+    takes its hue and colorfulness from the matching Shoujo color.
+    """
+    anchors = gray_anchors(mode, p)
+    src_l = {k: lightness(resolve(islands_colors, f"gray-{k}")[:7]) for k in STEPS}
+    curve = Curve([(src_l[k], lightness(c)) for k, c in anchors.items()])
+
+    neutral = sorted((lab(c) for c in anchors.values()), key=lambda x: x[0])
+    ab_a = Curve([(L, a) for L, a, _ in neutral])
+    ab_b = Curve([(L, b) for L, _, b in neutral])
+    lo_l, hi_l = neutral[0][0], neutral[-1][0]
+
+    ramps = {}
+    for k in STEPS:
+        if k in anchors:
+            ramps[f"gray-{k}"] = anchors[k]
+            continue
+        L = curve(src_l[k])
+        Lc = min(max(L, lo_l), hi_l)
+        ramps[f"gray-{k}"] = from_lab(L, ab_a(Lc), ab_b(Lc))
+
+    def hue_ramp(name, profile, base, bright):
+        src = {k: resolve(islands_colors, f"{profile}-{k}")[:7] for k in STEPS}
+        targets = {k: curve(lightness(src[k])) for k in STEPS}
+        L0, a0, b0 = lab(base)
+        c0, h0 = math.hypot(a0, b0), math.atan2(b0, a0)
+        k0 = min(STEPS, key=lambda k: abs(targets[k] - L0))
+        ref = chroma(src[k0]) or 1.0
+        hb = hue(bright) if bright else h0
+        Lb = lightness(bright) if bright else L0
+        for k in STEPS:
+            L = targets[k]
+            c = min(c0 * chroma(src[k]) / ref, c0 * 1.4)
+            h = h0
+            if bright and Lb != L0:
+                t = min(max((L - L0) / (Lb - L0), 0.0), 1.0)
+                h = h0 + math.atan2(math.sin(hb - h0), math.cos(hb - h0)) * t
+            ramps[f"{name}-{k}"] = from_lab(L, c * math.cos(h), c * math.sin(h))
+
+    for profile, (key, bright_key) in HUE_RAMPS.items():
+        hue_ramp(profile, profile, p[key], p.get(bright_key) if bright_key else None)
+    hue_ramp("accent", "blue", p["accent"], None)
+    return ramps
+
+
+def with_alpha(color, alpha):
+    return color[:7] + alpha
+
+
+def semantic_overrides(mode, p, islands_colors):
+    """Islands semantic colors redirected to Shoujo colors."""
+    out = {}
+    # The brand color is Islands blue; Shoujo's is its accent. Links stay blue.
+    # Islands Light tints white panels; Shoujo Light's panels are already a
+    # step darker, so its palest accent tints move one step down to show.
+    for key, value in islands_colors.items():
+        if isinstance(value, str) and re.fullmatch(r"blue-\d+", value) and key != "text-link":
+            step = int(value.split("-")[1])
+            if mode == "light" and step >= 140:
+                step -= 10
+            out[key] = f"accent-{step}"
+
+    out.update({
+        "accent-brand-bg": p["accent"],
+        "accent-brand-border": p["accent"],
+        "editor-text": p["foreground"],
+        "text-default": p["foreground"],
+        "text-link": p["blue"],
+        "text-error": p["red"],
+        "text-warning": p["yellow"],
+        "text-success": p["green"],
+        "popup-completion-match-text": p["accent"],
+    })
+
+    if mode == "dark":
+        out.update({
+            # Pastel fills read best with dark text, so every accent-filled
+            # control (default buttons, toggles, the run widget) gets one.
+            "text-over-accent": p["darker_background"],
+            "icon-over-accent": p["darker_background"],
+            "accent-error-bg": p["red"],
+            "accent-error-border": p["red"],
+            "accent-warning-bg": p["yellow"],
+            "accent-warning-border": p["yellow"],
+            "accent-success-bg": p["green"],
+            "accent-success-border": p["green"],
+            "toolbar-run-bg-hovered": p["bright_green"],
+            "toolbar-stop-bg-hovered": p["bright_red"],
+            "presentation-assistant-bg": p["accent"],
+            # Islands float over a darker frame.
+            "main-window-bg": p["darker_background"],
+            "selection-bg-inactive": p["selection"],
+            "search-match-bg": p["yellow"],
+            "transparent": with_alpha(p["background"], "00"),
+            "tab-file-color-mask-bg": with_alpha(p["background"], "80"),
+        })
+        frame = p["darker_background"]
+    else:
+        out.update({
+            # Frame, dialogs, then editor and tool windows, then popups, each
+            # a step lighter than the one beneath it.
+            "layer-0-bg": p["darker_background"],
+            "layer-0-bg-inline": p["dark_background"],
+            "layer-1-bg": p["dark_background"],
+            "layer-1-bg-inline": p["lighter_background"],
+            "layer-2-bg": p["background"],
+            "layer-2-bg-inline": p["lighter_background"],
+            "popup-bg": p["lighter_background"],
+            "popup-bg-inline": p["lighter_background"],
+            "accent-error-bg": p["red"],
+            "accent-error-border": p["red"],
+            "accent-warning-bg": p["yellow"],
+            "accent-warning-border": p["yellow"],
+            "accent-success-bg": p["green"],
+            "accent-success-border": p["green"],
+            "selection-bg-inactive": p["dark_background"],
+            "tab-selected-bg-inactive": p["dark_background"],
+            "search-match-bg": "yellow-150",
+            "main-window-bg-alt": "gray-140",
+            "tool-window-bg-alt": p["lighter_background"],
+            "editor-border-alt": "gray-140",
+            "transparent": with_alpha(p["lighter_background"], "00"),
+            "tab-file-color-mask-bg": with_alpha(p["background"], "80"),
+        })
+        frame = p["darker_background"]
+
+    for key in ("grad-hor-left", "grad-hor-right", "grad-ver-top", "grad-ver-bottom"):
+        value = islands_colors.get(key)
+        if isinstance(value, str) and value.startswith("#") and len(value) == 9:
+            out[key] = with_alpha(frame, value[7:])
+    return out
+
+
+def ui_overrides(mode, p):
+    if mode != "dark":
+        return {}
+    # Islands puts text-over-accent (now dark) on a few fills that are not the
+    # accent itself; give those readable colors instead.
+    return {
+        "SearchEverywhere": {"Tab": {"selectedForeground": "text-default"}},
+        "ParameterInfo": {"currentParameterForeground": p["accent"]},
+        "PresentationAssistant": {
+            "Bright": {"keymapLabel": "text-over-accent"},
+            "Pale": {"Popup": {"foreground": "text-default", "border": "layer-1-border"},
+                     "PopupBackground": "layer-1-bg", "keymapLabel": "text-muted"},
+        },
+        "GotItTooltip": {"iconBorderColor": "text-default"},
+        "Tooltip": {"Learning": {"iconBorderColor": "text-default"}},
+        "Counter": {"foreground": p["darker_background"]},
+    }
+
+
+def deep_merge(base, extra):
+    out = copy.deepcopy(base)
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def build_theme_json(mode, p, islands):
+    v = VARIANTS[mode]
+    colors = dict(islands["colors"])
+    colors.update(build_ramps(mode, p, islands["colors"]))
+    colors.update(semantic_overrides(mode, p, islands["colors"]))
+    theme = {
+        "name": v["name"],
+        "dark": mode == "dark",
+        "author": "Omarchy Shoujo",
+        "parentTheme": v["parent_theme"],
+        "editorScheme": f"/themes/{v['slug']}.xml",
+        "colors": colors,
+        # The parent's UI map is carried along too, so the palette above
+        # reaches every key whether or not the IDE resolves inherited keys
+        # against the child's colors.
+        "ui": deep_merge(islands["ui"], ui_overrides(mode, p)),
+    }
+    if "icons" in islands:
+        theme["icons"] = islands["icons"]
+    return theme
+
+
+# --- editor scheme -----------------------------------------------------------
+
+def ansi(p):
+    """The same 16 colors Omarchy gives kitty."""
+    return {
+        "CONSOLE_BLACK_OUTPUT": p["background"],
+        "CONSOLE_RED_OUTPUT": p["red"],
+        "CONSOLE_GREEN_OUTPUT": p["green"],
+        "CONSOLE_YELLOW_OUTPUT": p["yellow"],
+        "CONSOLE_BLUE_OUTPUT": p["blue"],
+        "CONSOLE_MAGENTA_OUTPUT": p["magenta"],
+        "CONSOLE_CYAN_OUTPUT": p["cyan"],
+        "CONSOLE_GRAY_OUTPUT": p["foreground"],
+        "CONSOLE_DARKGRAY_OUTPUT": p["muted"],
+        "CONSOLE_RED_BRIGHT_OUTPUT": p["bright_red"],
+        "CONSOLE_GREEN_BRIGHT_OUTPUT": p["bright_green"],
+        "CONSOLE_YELLOW_BRIGHT_OUTPUT": p["bright_yellow"],
+        "CONSOLE_BLUE_BRIGHT_OUTPUT": p["bright_blue"],
+        "CONSOLE_MAGENTA_BRIGHT_OUTPUT": p["bright_magenta"],
+        "CONSOLE_CYAN_BRIGHT_OUTPUT": p["bright_cyan"],
+        "CONSOLE_WHITE_OUTPUT": p["bright_foreground"],
+    }
+
+
+class Remapper:
+    """Carries a color from the source scheme onto the Shoujo palette.
+
+    Grays keep their place between the source editor background and text;
+    colored values take the nearest Shoujo hue, and tinted backgrounds stay
+    about as strong a tint of the editor background as they were.
+    """
+
+    def __init__(self, p, src_bg, src_fg, mode):
+        self.p, self.mode = p, mode
+        self.src_bg, self.src_fg = lab(src_bg), lab(src_fg)
+        self.hues = {k: hue(p[k]) for k in SYNTAX_HUES}
+
+    def nearest(self, value):
+        h = hue(value)
+        return min(SYNTAX_HUES, key=lambda k: hue_distance(h, self.hues[k]))
+
+    def __call__(self, value, kind):
+        if not value:
+            return value
+        (rgb), alpha = parse_hex(value)
+        L, a, b = lab(rgb)
+        c = math.hypot(a, b)
+        bg, fg = self.p["background"], self.p["foreground"]
+        threshold = 0.025 if kind == "bg" else 0.04
+        if c < threshold:
+            span = self.src_fg[0] - self.src_bg[0]
+            t = (L - self.src_bg[0]) / span if span else 0
+            out = mix(bg, fg, min(max(t, -0.25), 1.15))
+        else:
+            role = self.p[self.nearest(rgb)]
+            if kind == "bg":
+                dist = math.dist((L, a, b), self.src_bg)
+                t = min(max(dist / 0.32, 0.12), 0.6)
+                out = mix(bg, role, t)
+            else:
+                out = role
+        return out + alpha
+
+
+def scheme_values(mode, p):
+    """Colors and text attributes set by hand, by part played."""
+    bg, fg = p["background"], p["foreground"]
+    tint = 0.2 if mode == "dark" else 0.24
+
+    def t(color, amount=1.0):
+        return mix(bg, color, tint * amount)
+
+    doc = mix(p["dark_foreground"], p["green"], 0.35)
+    colors = {
+        "CARET_COLOR": p["accent"],
+        "CARET_ROW_COLOR": mix(bg, p["lighter_background"], 0.6),
+        "SELECTION_BACKGROUND": p["selection"],
+        "SELECTION_FOREGROUND": "",
+        "LINE_NUMBERS_COLOR": p["muted"],
+        "LINE_NUMBER_ON_CARET_ROW_COLOR": p["accent"],
+        "GUTTER_BACKGROUND": bg,
+        "CONSOLE_BACKGROUND_KEY": bg,
+        "INDENT_GUIDE": p["lighter_background"],
+        "VISUAL_INDENT_GUIDE": p["lighter_background"],
+        "SELECTED_INDENT_GUIDE": p["muted"],
+        "MATCHED_BRACES_INDENT_GUIDE_COLOR": p["muted"],
+        "RIGHT_MARGIN_COLOR": p["lighter_background"],
+        "METHOD_SEPARATORS_COLOR": p["lighter_background"],
+        "WHITESPACES": mix(bg, p["muted"], 0.7),
+        "ADDED_LINES_COLOR": p["green"],
+        "MODIFIED_LINES_COLOR": p["blue"],
+        "DELETED_LINES_COLOR": p["red"],
+        "IGNORED_ADDED_LINES_BORDER_COLOR": p["green"],
+        "IGNORED_MODIFIED_LINES_BORDER_COLOR": p["blue"],
+        "IGNORED_DELETED_LINES_BORDER_COLOR": p["red"],
+        "WHITESPACES_MODIFIED_LINES_COLOR": t(p["orange"], 1.4),
+        "DOCUMENTATION_COLOR": p["lighter_background"],
+        "LOOKUP_COLOR": p["lighter_background"],
+        "INFORMATION_HINT": p["lighter_background"],
+        "QUESTION_HINT": t(p["accent"]),
+        "ERROR_HINT": t(p["red"]),
+        "NOTIFICATION_BACKGROUND": t(p["accent"]),
+        "PROMOTION_PANE": t(p["accent"]),
+        "HINT_BORDER": p["selection"],
+        "DOC_COMMENT_GUIDE": t(p["green"], 1.5),
+        "DOC_COMMENT_LINK": p["cyan"],
+        "ANNOTATIONS_COLOR": p["dark_foreground"],
+        "ANNOTATIONS_LAST_COMMIT_COLOR": fg,
+        "TEARLINE_COLOR": p["lighter_background"],
+        "SELECTED_TEARLINE_COLOR": p["muted"],
+        "VCS_ANNOTATIONS_COLOR_1": t(p["accent"], 2.0),
+        "VCS_ANNOTATIONS_COLOR_2": t(p["accent"], 1.5),
+        "VCS_ANNOTATIONS_COLOR_3": t(p["accent"], 1.0),
+        "VCS_ANNOTATIONS_COLOR_4": t(p["accent"], 0.6),
+        "VCS_ANNOTATIONS_COLOR_5": t(p["accent"], 0.3),
+    }
+
+    def attr(fg_=None, bg_=None, font=None, effect=None, effect_type=None, stripe=None):
+        out = {}
+        if fg_ is not None:
+            out["FOREGROUND"] = fg_
+        if bg_ is not None:
+            out["BACKGROUND"] = bg_
+        if font is not None:
+            out["FONT_TYPE"] = str(font)
+        if effect is not None:
+            out["EFFECT_COLOR"] = effect
+            out["EFFECT_TYPE"] = str(effect_type if effect_type is not None else 1)
+        if stripe is not None:
+            out["ERROR_STRIPE_COLOR"] = stripe
+        return out
+
+    BOLD, ITALIC, BOTH = 1, 2, 3
+    UNDERLINE, WAVE, STRIKE = 1, 2, 3
+    punct = p["light_foreground"]
+    attrs = {
+        "TEXT": attr(fg, bg),
+        "DEFAULT_IDENTIFIER": attr(fg),
+        "DEFAULT_LOCAL_VARIABLE": attr(fg),
+        "DEFAULT_PARAMETER": attr(fg),
+        "DEFAULT_KEYWORD": attr(p["magenta"]),
+        "DEFAULT_STRING": attr(p["green"]),
+        "DEFAULT_NUMBER": attr(p["orange"]),
+        "DEFAULT_CONSTANT": attr(p["orange"], font=ITALIC),
+        "DEFAULT_PREDEFINED_SYMBOL": attr(p["cyan"], font=ITALIC),
+        "DEFAULT_LINE_COMMENT": attr(p["dark_foreground"], font=ITALIC),
+        "DEFAULT_BLOCK_COMMENT": attr(p["dark_foreground"], font=ITALIC),
+        "DEFAULT_DOC_COMMENT": attr(doc, font=ITALIC),
+        "DEFAULT_DOC_COMMENT_TAG": attr(mix(doc, p["green"], 0.5), font=BOTH),
+        "DEFAULT_DOC_COMMENT_TAG_VALUE": attr(p["light_foreground"], font=ITALIC),
+        "DEFAULT_DOC_MARKUP": attr(mix(doc, p["green"], 0.3)),
+        "DEFAULT_FUNCTION_DECLARATION": attr(p["blue"]),
+        "DEFAULT_INSTANCE_METHOD": attr(p["blue"]),
+        "DEFAULT_STATIC_METHOD": attr(p["blue"], font=ITALIC),
+        "DEFAULT_CLASS_NAME": attr(p["yellow"]),
+        "DEFAULT_CLASS_REFERENCE": attr(p["yellow"]),
+        "DEFAULT_INTERFACE_NAME": attr(p["yellow"], font=ITALIC),
+        "DEFAULT_INSTANCE_FIELD": attr(p["red"]),
+        "DEFAULT_STATIC_FIELD": attr(p["red"], font=ITALIC),
+        "DEFAULT_GLOBAL_VARIABLE": attr(p["red"], font=ITALIC),
+        "DEFAULT_METADATA": attr(p["cyan"]),
+        "DEFAULT_LABEL": attr(p["cyan"]),
+        "TYPE_PARAMETER_NAME_ATTRIBUTES": attr(p["cyan"]),
+        "DEFAULT_VALID_STRING_ESCAPE": attr(p["cyan"]),
+        "DEFAULT_INVALID_STRING_ESCAPE": attr(p["red"], effect=p["red"], effect_type=WAVE),
+        "DEFAULT_OPERATION_SIGN": attr(punct),
+        "DEFAULT_BRACES": attr(punct),
+        "DEFAULT_BRACKETS": attr(punct),
+        "DEFAULT_PARENTHS": attr(punct),
+        "DEFAULT_COMMA": attr(punct),
+        "DEFAULT_DOT": attr(punct),
+        "DEFAULT_SEMICOLON": attr(punct),
+        "DEFAULT_TAG": attr(p["red"]),
+        "DEFAULT_ATTRIBUTE": attr(p["yellow"]),
+        "DEFAULT_ENTITY": attr(p["cyan"]),
+        "XML_TAG": attr(punct),
+        "XML_TAG_NAME": attr(p["red"]),
+        "XML_CUSTOM_TAG_NAME": attr(p["red"]),
+        "XML_ATTRIBUTE_NAME": attr(p["yellow"]),
+        "XML_ENTITY_REFERENCE": attr(p["cyan"]),
+        "XML_PROLOGUE": attr(p["magenta"]),
+        "HTML_TAG": attr(punct),
+        "HTML_TAG_NAME": attr(p["red"]),
+        "HTML_CUSTOM_TAG_NAME": attr(p["red"]),
+        "HTML_ATTRIBUTE_NAME": attr(p["yellow"]),
+        "HTML_ENTITY_REFERENCE": attr(p["cyan"]),
+        "MARKDOWN_HEADER_LEVEL_1": attr(p["accent"], font=BOLD),
+        "MARKDOWN_HEADER_LEVEL_2": attr(p["accent"], font=BOLD),
+        "MARKDOWN_HEADER_LEVEL_3": attr(p["accent"], font=BOLD),
+        "MARKDOWN_HEADER_LEVEL_4": attr(p["accent"]),
+        "MARKDOWN_HEADER_LEVEL_5": attr(p["accent"]),
+        "MARKDOWN_HEADER_LEVEL_6": attr(p["accent"]),
+        "TODO_DEFAULT_ATTRIBUTES": attr(p["accent"], font=BOTH, stripe=p["accent"]),
+        "HYPERLINK_ATTRIBUTES": attr(p["blue"], effect=p["blue"], effect_type=UNDERLINE),
+        "CTRL_CLICKABLE": attr(p["blue"], effect=p["blue"], effect_type=UNDERLINE),
+        "FOLLOWED_HYPERLINK_ATTRIBUTES": attr(p["magenta"], effect=p["magenta"], effect_type=UNDERLINE),
+        "MATCHED_BRACE_ATTRIBUTES": attr(p["accent"], t(p["accent"], 1.2), font=BOLD),
+        "UNMATCHED_BRACE_ATTRIBUTES": attr(p["red"], t(p["red"], 1.2), font=BOLD),
+        "IDENTIFIER_UNDER_CARET_ATTRIBUTES": attr(bg_=t(p["cyan"]), stripe=p["cyan"]),
+        "WRITE_IDENTIFIER_UNDER_CARET_ATTRIBUTES": attr(bg_=t(p["accent"]), stripe=p["accent"]),
+        "SEARCH_RESULT_ATTRIBUTES": attr(bg_=t(p["green"], 1.2), stripe=p["green"]),
+        "WRITE_SEARCH_RESULT_ATTRIBUTES": attr(bg_=t(p["red"], 1.2), stripe=p["red"]),
+        "TEXT_SEARCH_RESULT_ATTRIBUTES": attr(bg_=t(p["yellow"], 1.8), stripe=p["yellow"]),
+        "FOLDED_TEXT_ATTRIBUTES": attr(p["dark_foreground"], p["lighter_background"]),
+        "INLAY_DEFAULT": attr(p["dark_foreground"], p["lighter_background"]),
+        "INLINE_PARAMETER_HINT": attr(p["dark_foreground"], p["lighter_background"]),
+        "INLINE_PARAMETER_HINT_HIGHLIGHTED": attr(fg, p["selection"]),
+        "INLINE_PARAMETER_HINT_CURRENT": attr(p["accent"], t(p["accent"])),
+        "BREAKPOINT_ATTRIBUTES": attr(bg_=t(p["red"]), stripe=p["red"]),
+        "EXECUTIONPOINT_ATTRIBUTES": attr(bg_=t(p["blue"], 1.6), stripe=p["blue"]),
+        "NOT_TOP_FRAME_ATTRIBUTES": attr(bg_=t(p["blue"], 0.8)),
+        "DIFF_INSERTED": attr(bg_=t(p["green"]), stripe=p["green"]),
+        "DIFF_DELETED": attr(bg_=t(p["red"]), stripe=p["red"]),
+        "DIFF_MODIFIED": attr(bg_=t(p["blue"]), stripe=p["blue"]),
+        "DIFF_CONFLICT": attr(bg_=t(p["orange"]), stripe=p["orange"]),
+        "CONSOLE_NORMAL_OUTPUT": attr(fg),
+        "CONSOLE_ERROR_OUTPUT": attr(p["red"]),
+        "CONSOLE_SYSTEM_OUTPUT": attr(p["light_foreground"]),
+        "CONSOLE_USER_INPUT": attr(p["green"], font=ITALIC),
+        "LOG_ERROR_OUTPUT": attr(p["red"]),
+        "LOG_WARNING_OUTPUT": attr(p["yellow"]),
+        "LOG_INFO_OUTPUT": attr(p["green"]),
+        "LOG_VERBOSE_OUTPUT": attr(p["blue"]),
+        "LOG_DEBUG_OUTPUT": attr(p["dark_foreground"]),
+        "LOG_EXPIRED_ENTRY": attr(p["muted"]),
+    }
+    for name, color in ansi(p).items():
+        attrs[name] = attr(color)
+    return colors, attrs
+
+
+def build_scheme_xml(mode, p, source_xml, ide_version):
+    v = VARIANTS[mode]
+    root = ET.fromstring(source_xml)
+
+    src_text = {}
+    for opt in root.iterfind("./attributes/option[@name='TEXT']/value/option"):
+        src_text[opt.get("name")] = "#" + opt.get("value").zfill(6)
+    src_bg = src_text.get("BACKGROUND", "#ffffff" if mode == "light" else "#191a1c")
+    src_fg = src_text.get("FOREGROUND", "#080808" if mode == "light" else "#bcbec4")
+    remap = Remapper(p, src_bg, src_fg, mode)
+
+    def hexval(value):
+        return "#" + value.zfill(6) if value else ""
+
+    colors = {}
+    for opt in root.iterfind("./colors/option"):
+        value = opt.get("value", "")
+        if re.fullmatch(r"[0-9a-fA-F]{1,8}", value or ""):
+            kind = "fg" if any(s in opt.get("name") for s in ("FILESTATUS", "LINES_COLOR", "BORDER_COLOR")) else "bg"
+            colors[opt.get("name")] = remap(hexval(value), kind)
+        else:
+            colors[opt.get("name")] = value
+
+    attrs, bases = {}, {}
+    for opt in root.iterfind("./attributes/option"):
+        name = opt.get("name")
+        if opt.get("baseAttributes"):
+            bases[name] = opt.get("baseAttributes")
+            continue
+        value = opt.find("value")
+        if value is None:
+            continue
+        fields = {}
+        for field in value.iterfind("option"):
+            fname, fval = field.get("name"), field.get("value", "")
+            if fname in ("FOREGROUND", "BACKGROUND", "EFFECT_COLOR", "ERROR_STRIPE_COLOR"):
+                if re.fullmatch(r"[0-9a-fA-F]{1,8}", fval):
+                    kind = "bg" if fname == "BACKGROUND" else "fg"
+                    fields[fname] = remap(hexval(fval), kind)
+                else:
+                    fields[fname] = fval
+            else:
+                fields[fname] = fval
+        attrs[name] = fields
+
+    hand_colors, hand_attrs = scheme_values(mode, p)
+    colors.update(hand_colors)
+    for name, fields in hand_attrs.items():
+        bases.pop(name, None)
+        attrs[name] = fields
+
+    scheme = ET.Element("scheme", name=v["name"], version="142", parent_scheme=v["parent_scheme"])
+    meta = ET.SubElement(scheme, "metaInfo")
+    for key, val in (("ide", "idea"), ("ideVersion", ide_version), ("originalScheme", v["name"])):
+        ET.SubElement(meta, "property", name=key).text = val
+    col_el = ET.SubElement(scheme, "colors")
+    for name in sorted(colors):
+        ET.SubElement(col_el, "option", name=name, value=colors[name].lstrip("#"))
+    attr_el = ET.SubElement(scheme, "attributes")
+    for name in sorted(set(attrs) | set(bases)):
+        if name in bases:
+            ET.SubElement(attr_el, "option", name=name, baseAttributes=bases[name])
+            continue
+        opt = ET.SubElement(attr_el, "option", name=name)
+        val = ET.SubElement(opt, "value")
+        for fname, fval in attrs[name].items():
+            if fname in ("FOREGROUND", "BACKGROUND", "EFFECT_COLOR", "ERROR_STRIPE_COLOR"):
+                fval = fval.lstrip("#")
+            ET.SubElement(val, "option", name=fname, value=fval)
+    ET.indent(scheme, "  ")
+    return ET.tostring(scheme, encoding="unicode") + "\n"
+
+
+# --- plugin ------------------------------------------------------------------
+
+def find_ide():
+    env = os.environ.get("INTELLIJ_HOME")
+    candidates = [Path(env)] if env else []
+    candidates += [Path("/usr/share/idea"), Path("/usr/share/intellij-idea-ultimate-edition")]
+    for pattern in ("/opt/*idea*", "/opt/intellij*"):
+        candidates += sorted(Path("/").glob(pattern.lstrip("/")))
+    candidates += sorted((DATA_ROOT / "Toolbox/apps").glob("*idea*/**/product-info.json"))
+    for c in candidates:
+        c = c.parent if c.name == "product-info.json" else c
+        if (c / PLATFORM_JAR).is_file():
+            return c
+    return None
+
+
+def build_plugin(ide):
+    info = json.loads((ide / "product-info.json").read_text()) if (ide / "product-info.json").exists() else {}
+    ide_version = info.get("version", "")
+    files = {}
+    with zipfile.ZipFile(ide / PLATFORM_JAR) as jar:
+        for mode, v in VARIANTS.items():
+            palette = load_palette(v["slug"])
+            islands = json.loads(jar.read(v["islands_json"]))
+            theme = build_theme_json(mode, palette, islands)
+            scheme = build_scheme_xml(mode, palette, jar.read(v["source_scheme"]), ide_version)
+            files[f"themes/{v['slug']}.theme.json"] = json.dumps(theme, indent=2) + "\n"
+            files[f"themes/{v['slug']}.xml"] = scheme
+
+    digest = hashlib.sha256("".join(files[k] for k in sorted(files)).encode()).hexdigest()[:10]
+    providers = "\n".join(
+        f'    <themeProvider id="{v["slug"]}" path="/themes/{v["slug"]}.theme.json" targetUi="islands"/>'
+        for v in VARIANTS.values()
+    )
+    files["META-INF/plugin.xml"] = f"""<idea-plugin>
+  <id>{PLUGIN_ID}</id>
+  <name>Shoujo Theme</name>
+  <version>1.0.0+{digest}</version>
+  <vendor>Omarchy dotfiles</vendor>
+  <description><![CDATA[
+    Shoujo Dark and Shoujo Light, the Omarchy Shoujo themes for the Islands UI.
+    Generated by intellij-shoujo-theme from the themes' colors.toml.
+  ]]></description>
+  <idea-version since-build="253"/>
+  <depends>com.intellij.modules.platform</depends>
+  <extensions defaultExtensionNs="com.intellij">
+{providers}
+  </extensions>
+</idea-plugin>
+"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as out:
+        for name in sorted(files):
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            out.writestr(entry, files[name])
+    return buf.getvalue(), files
+
+
+def product_dirs():
+    if not CONFIG_ROOT.is_dir():
+        return []
+    return sorted(d.name for d in CONFIG_ROOT.iterdir()
+                  if d.is_dir() and re.fullmatch(r"[A-Za-z]+\d{4}\.\d+", d.name))
+
+
+def install(jar_bytes, product):
+    target = DATA_ROOT / product / PLUGIN_DIR / "lib" / f"{PLUGIN_DIR}.jar"
+    if target.is_file() and target.read_bytes() == jar_bytes:
+        return target, False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".jar.tmp")
+    tmp.write_bytes(jar_bytes)
+    tmp.replace(target)
+    return target, True
+
+
+# --- IDE settings ------------------------------------------------------------
+
+def ide_running():
+    result = subprocess.run(["pgrep", "-f", "com.intellij.idea.Main"], capture_output=True)
+    return result.returncode == 0
+
+
+def backup(path):
+    if path.exists():
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        path.with_name(f"{path.name}.bak.{stamp}").write_bytes(path.read_bytes())
+
+
+def load_application_xml(path):
+    if path.exists():
+        return ET.parse(path).getroot()
+    return ET.Element("application")
+
+
+def component(root, name):
+    comp = root.find(f"./component[@name='{name}']")
+    if comp is None:
+        comp = ET.SubElement(root, "component", name=name)
+    return comp
+
+
+def set_child(parent, tag, **attrs):
+    el = parent.find(tag)
+    if el is None:
+        el = ET.SubElement(parent, tag)
+    el.attrib.clear()
+    el.attrib.update(attrs)
+
+
+def write_xml(root, path):
+    ET.indent(root, "  ")
+    path.write_text(ET.tostring(root, encoding="unicode") + "\n")
+
+
+def configure(product):
+    options = CONFIG_ROOT / product / "options"
+    options.mkdir(parents=True, exist_ok=True)
+    current = CURRENT_THEME_NAME.read_text().strip() if CURRENT_THEME_NAME.exists() else ""
+    mode = "light" if current == VARIANTS["light"]["slug"] else "dark"
+
+    laf_path = options / "laf.xml"
+    backup(laf_path)
+    root = load_application_xml(laf_path)
+    laf = component(root, "LafManager")
+    laf.set("autodetect", "true")
+    set_child(laf, "laf", themeId=VARIANTS[mode]["slug"])
+    set_child(laf, "preferred-light-laf", themeId=VARIANTS["light"]["slug"])
+    set_child(laf, "preferred-dark-laf", themeId=VARIANTS["dark"]["slug"])
+    write_xml(root, laf_path)
+
+    scheme_path = options / "colors.scheme.xml"
+    backup(scheme_path)
+    root = load_application_xml(scheme_path)
+    set_child(component(root, "EditorColorsManagerImpl"), "global_color_scheme", name=VARIANTS[mode]["name"])
+    write_xml(root, scheme_path)
+    return laf_path, scheme_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--configure", action="store_true",
+                        help="set Sync with OS to Shoujo Light/Dark (IDE must be closed)")
+    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("theme", nargs="?", help=argparse.SUPPRESS)  # slug passed by the theme-set hook
+    args = parser.parse_args()
+    say = (lambda *a: None) if args.quiet else print
+
+    for v in VARIANTS.values():
+        if not (THEMES_DIR / v["slug"] / "colors.toml").is_file():
+            say(f"No {v['slug']} theme in {THEMES_DIR}; nothing to build.")
+            return 0
+    ide = find_ide()
+    if ide is None:
+        say("No IntelliJ IDEA install found (set INTELLIJ_HOME); nothing to build.")
+        return 0
+    products = product_dirs()
+    if not products:
+        say(f"No JetBrains config dirs in {CONFIG_ROOT}; start the IDE once first.")
+        return 0
+
+    jar_bytes, _ = build_plugin(ide)
+    for product in products:
+        target, changed = install(jar_bytes, product)
+        say(f"{'Installed' if changed else 'Up to date'}: {target}")
+
+    if args.configure:
+        if ide_running():
+            say("IntelliJ is running; close it and run with --configure again.")
+            return 1
+        for product in products:
+            for path in configure(product):
+                say(f"Configured: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

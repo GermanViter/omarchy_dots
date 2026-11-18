@@ -1,0 +1,13 @@
+#!/bin/bash
+# Keeps the Shoujo theme plugin for IntelliJ IDEA built from the Omarchy
+# shoujo-dark and shoujo-light themes.
+#
+# Called by omarchy-theme-set with the theme slug as $1. The plugin is only
+# rewritten when a colors.toml, the IDE's own Islands themes, or the set of
+# JetBrains products on this machine changed, so most switches do nothing.
+# IntelliJ follows the light/dark switch itself through "Sync with OS".
+
+BUILDER="$HOME/.local/bin/intellij-shoujo-theme"
+[[ -x $BUILDER ]] || exit 0
+
+exec python3 -I "$BUILDER" --quiet "$@"
